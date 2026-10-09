@@ -256,39 +256,23 @@ pub fn open_data_dir(app: AppHandle) -> Result<()> {
 /// 把现有数据复制到新目录并记下指针，**重启后生效**。返回新目录。
 #[tauri::command]
 pub fn migrate_data_dir(state: State<'_, std::sync::Arc<AppState>>, target: String) -> Result<String> {
-    let trimmed = target.trim().trim_matches('"').trim();
-    if trimmed.is_empty() {
-        return Err(crate::Error::Other("请先填写目标目录".into()));
-    }
-    let target_path = std::path::PathBuf::from(trimmed);
-    std::fs::create_dir_all(&target_path)?;
-    // canonicalize 会带上 Windows 的 \\?\ 前缀，写进 location.txt 很难看，去掉它
-    let target_path = std::fs::canonicalize(&target_path).unwrap_or(target_path);
-    let target_clean = target_path
-        .to_string_lossy()
-        .trim_start_matches(r"\\?\")
-        .to_string();
-    let target_path = std::path::PathBuf::from(&target_clean);
-
-    let current = paths::data_dir()?;
-    let current_canon = std::fs::canonicalize(&current).unwrap_or(current.clone());
-    if current_canon == target_path {
-        return Err(crate::Error::Other("目标目录就是当前数据目录".into()));
-    }
-    // 先把 WAL 落回主库：copy_tree 会跳过 -wal/-shm，不 checkpoint 就会漏掉最近的记录
-    state.store.lock().checkpoint()?;
-    let bytes = paths::copy_tree(&current, &target_path)?;
-    paths::set_custom_dir(Some(&target_path))?;
-    log::info!("数据目录迁移到 {}（复制 {} 字节），重启后生效", target_clean, bytes);
-    Ok(target_clean)
+    let store = state.store.lock();
+    crate::config::migrate_data_dir(&store, &target)
 }
 
 /// 恢复默认数据目录（重启后生效）。
 #[tauri::command]
 pub fn reset_data_dir(state: State<'_, std::sync::Arc<AppState>>) -> Result<String> {
-    state.store.lock().checkpoint()?;
-    paths::set_custom_dir(None)?;
-    Ok(paths::bootstrap_dir()?.to_string_lossy().to_string())
+    let store = state.store.lock();
+    crate::config::reset_data_dir(&store)
+}
+
+/// 设置面板开始/结束录制热键。录制期间全局热键不抢按键，
+/// 否则"想把呼出热键改成 Ctrl+Shift+V"会先被自己的全局热键截胡。
+#[tauri::command]
+pub fn set_recording(state: State<'_, std::sync::Arc<AppState>>, recording: bool) -> Result<bool> {
+    state.set_recording(recording);
+    Ok(recording)
 }
 
 /// 延迟重启自己。单实例插件会抢在旧进程退出前把新进程顶掉，所以让新进程等 1.2 秒。

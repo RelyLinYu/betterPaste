@@ -26,6 +26,12 @@ pub struct AppState {
     pub target_hwnd: AtomicI64,
     /// 我们自己写进剪贴板时产生的序号，避免重复入库
     pub suppress_seq: AtomicU32,
+    /// 设置面板正在录制热键：此时全局热键不能抢按键（否则想录 Ctrl+Shift+V
+    /// 会被自己的浮层热键截胡，框里根本写不进去）
+    pub recording: AtomicBool,
+    /// 启动后的"展示保护期"截止时间戳（毫秒）。这段时间里浮层不因为失焦自动收起，
+    /// 否则双击启动时刚弹出的提示会被立刻抢焦点收掉，用户什么也看不到。
+    pub launch_guard_until: AtomicI64,
     pub shutdown: AtomicBool,
     /// 由 `bind_app` 在 setup 阶段填入；watcher 线程也要用它发事件。
     app: OnceLock<AppHandle>,
@@ -39,6 +45,8 @@ impl AppState {
             paused: AtomicBool::new(false),
             target_hwnd: AtomicI64::new(0),
             suppress_seq: AtomicU32::new(0),
+            recording: AtomicBool::new(false),
+            launch_guard_until: AtomicI64::new(0),
             shutdown: AtomicBool::new(false),
             app: OnceLock::new(),
         })
@@ -72,6 +80,25 @@ impl AppState {
             crate::tray::sync_pause_state(app, paused);
         }
         self.emit(EVENT_PAUSED, paused);
+    }
+
+    /// 设置面板进入/退出"录制热键"状态。
+    pub fn is_recording(&self) -> bool {
+        self.recording.load(Ordering::Relaxed)
+    }
+
+    pub fn set_recording(&self, on: bool) {
+        self.recording.store(on, Ordering::Relaxed);
+    }
+
+    /// 启动展示保护期：接下来 `ms` 毫秒内浮层不因失焦自动收起。
+    pub fn set_launch_guard(&self, ms: i64) {
+        self.launch_guard_until
+            .store(crate::store::now_ms() + ms, Ordering::Relaxed);
+    }
+
+    pub fn launch_guard_active(&self) -> bool {
+        self.launch_guard_until.load(Ordering::Relaxed) > crate::store::now_ms()
     }
 
     pub fn toggle_paused(&self) -> bool {

@@ -87,6 +87,9 @@ export const setPaused = (paused: boolean) => invoke<boolean>("set_paused", { pa
 
 export const getPaused = () => invoke<boolean>("get_paused");
 
+/** 开始/结束录制热键：录制期间全局热键不抢按键（否则录 Ctrl+Shift+V 会被浮层截胡）。 */
+export const setRecording = (recording: boolean) => invoke<boolean>("set_recording", { recording });
+
 export const openSettings = () => invoke<void>("open_settings");
 
 export const hideOverlay = () => invoke<void>("hide_overlay");

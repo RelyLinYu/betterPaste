@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{paths, Result};
+use crate::{paths, Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -147,6 +147,131 @@ fn salvage(raw: &str) -> Option<(AppConfig, Vec<String>)> {
     }
     let cfg = serde_json::from_value::<AppConfig>(serde_json::Value::Object(obj)).ok()?;
     Some((cfg, dropped))
+}
+
+// ---------------------------------------------------------------- 数据目录
+
+/// 打印数据目录现状（`clipstack --data-dir`），也用来自检配置有没有生效。
+pub fn data_dir_report() -> String {
+    let current = paths::data_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|e| format!("<读取失败: {e}>"));
+    let bootstrap = paths::bootstrap_dir().map(|p| p.display().to_string()).unwrap_or_default();
+    let env = std::env::var("CLIPSTACK_DATA_DIR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "（未设置）".into());
+    let pointer = paths::location_file()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let custom = std::fs::read_to_string(paths::location_file().unwrap_or_default())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "（未设置）".into());
+    format!(
+        "当前数据目录 : {current}\n默认目录     : {bootstrap}\n环境变量覆盖 : {env}\n指针文件     : {pointer}\n指针内容     : {custom}\n\n改位置：clipstack --migrate-data <目录>  ／  恢复：clipstack --reset-data-dir"
+    )
+}
+
+/// 迁移数据目录。IPC（设置面板按钮）与 `--migrate-data` 共用同一份逻辑，
+/// 保证"界面能改"和"命令行能改"走的是同一条路。
+pub fn migrate_data_dir(store: &crate::store::Store, target: &str) -> Result<String> {
+    let trimmed = target.trim().trim_matches('"').trim();
+    if trimmed.is_empty() {
+        return Err(Error::Other("请先填写目标目录".into()));
+    }
+    let target_path = std::path::PathBuf::from(trimmed);
+    std::fs::create_dir_all(&target_path)?;
+    let target_path = std::fs::canonicalize(&target_path).unwrap_or(target_path);
+    // canonicalize 会带上 Windows 的 \\?\ 前缀，写进 location.txt 很难看，去掉它
+    let target_clean = target_path
+        .to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .to_string();
+    let target_path = std::path::PathBuf::from(&target_clean);
+
+    let current = paths::data_dir()?;
+    if !current.is_dir() {
+        return Err(Error::Other(format!(
+            "当前数据目录不存在：{}（先用 --reset-data-dir 复位）",
+            current.display()
+        )));
+    }
+    let current_canon = std::fs::canonicalize(&current).unwrap_or(current.clone());
+    if current_canon == target_path {
+        return Err(Error::Other("目标目录就是当前数据目录".into()));
+    }
+    // 先把 WAL 落回主库：copy_tree 会跳过 -wal/-shm，不 checkpoint 就会漏掉最近的记录
+    store.checkpoint()?;
+    let bytes = paths::copy_tree(&current, &target_path)?;
+    paths::set_custom_dir(Some(&target_path))?;
+    log::info!(
+        "数据目录迁移到 {}（复制 {} 字节，原目录保留），重启后生效",
+        target_clean,
+        bytes
+    );
+    Ok(target_clean)
+}
+
+/// 恢复默认数据目录。
+///
+/// 注意：**打不开当前库也一定要把指针清掉**——否则用户把数据目录指到一个被删掉/
+/// 损坏的目录之后，就再也回不到默认目录了（自检时就踩到过这个坑）。
+pub fn reset_data_dir(store: &crate::store::Store) -> Result<String> {
+    if let Err(e) = store.checkpoint() {
+        log::warn!("checkpoint 失败，仍然复位数据目录: {e}");
+    }
+    paths::set_custom_dir(None)?;
+    Ok(paths::bootstrap_dir()?.to_string_lossy().to_string())
+}
+
+/// `clipstack --migrate-data <目录>`：不开 UI 也能改数据目录（便于自检/运维）。
+pub fn migrate_data_dir_cli(target: &str) -> bool {
+    match crate::store::Store::open() {
+        Ok(store) => match migrate_data_dir(&store, target) {
+            Ok(dir) => {
+                println!("已迁移到 {dir}（原目录保留不删）。重启 clipstack 后生效。");
+                true
+            }
+            Err(e) => {
+                println!("迁移失败: {e}");
+                false
+            }
+        },
+        Err(e) => {
+            println!("无法打开当前数据库: {e}");
+            false
+        }
+    }
+}
+
+/// `clipstack --reset-data-dir`：恢复默认数据目录（当前库打不开也能复位）。
+pub fn reset_data_dir_cli() -> bool {
+    match crate::store::Store::open() {
+        Ok(store) => {
+            if let Err(e) = store.checkpoint() {
+                println!("提醒: checkpoint 失败（{e}），仍然复位目录指针");
+            }
+        }
+        Err(e) => println!("提醒: 当前数据目录不可用（{e}），仍然复位目录指针"),
+    }
+    match paths::set_custom_dir(None) {
+        Ok(()) => match paths::bootstrap_dir() {
+            Ok(dir) => {
+                println!("已恢复默认数据目录 {}。重启 clipstack 后生效。", dir.display());
+                true
+            }
+            Err(e) => {
+                println!("复位成功但读不到默认目录: {e}");
+                true
+            }
+        },
+        Err(e) => {
+            println!("复位失败: {e}");
+            false
+        }
+    }
 }
 
 /// `clipstack --probe [query] [--bench N]`：不开 UI，直接打印最近的历史。/// 带 `--bench` 时把查询重复 N 次并打印耗时——用来核对「500 条下搜索 ≤100ms」。

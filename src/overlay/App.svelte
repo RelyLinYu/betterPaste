@@ -340,9 +340,13 @@
     await refresh();
     searchInput?.focus();
 
-    // 首次运行 / 托盘「使用提示」：给一句看得见的说明
+    // 首次运行 / 启动提示：给一句看得见的说明，并在 6 秒后自己收起
+    // （它就是"打个招呼"，不该一直占着屏幕；想看再按一次热键）
     const hint = await takeStartupHint().catch(() => null);
-    if (hint) showToast(hint, "info");
+    if (hint) {
+      showToast(hint, "info");
+      setTimeout(() => hideOverlay(), 6000);
+    }
 
     unlisteners.push(
       await listen("clipstack://changed", () => refresh()),

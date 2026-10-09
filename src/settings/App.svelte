@@ -15,6 +15,7 @@
     migrateDataDir,
     resetDataDir,
     restartApp,
+    setRecording,
     EVENT_CONFIG_CHANGED,
     type AppConfig,
     type ClipEntry,
@@ -54,6 +55,9 @@
   let dirInput = "";
   let migrating = false;
   let resettingDir = false;
+  /** 呼出热键输入框是否正在录制（录制期间后端不抢全局热键）。 */
+  let recording = false;
+  let hotkeyEl: HTMLInputElement | null = null;
 
   const DEFAULTS: AppConfig = {
     maxEntries: 500,
@@ -81,6 +85,33 @@
   function markDirty() {
     dirty = true;
     savedAt = "";
+  }
+
+  /* ---------------------------------------------------------------- 热键录制
+     录制期间要告诉后端「别抢全局热键」，否则用户按下 Ctrl+Shift+V 会被浮层
+     截胡、根本写不进输入框。任何一条退出路径都必须关掉录制，这里全部走
+     `recordingOff()`；它是幂等的，重复调用无害。 */
+
+  /** 只负责通知后端，不碰本地状态（卸载时也能安全调用）。 */
+  function notifyRecordingOff() {
+    if (!recording) return;
+    void setRecording(false).catch((e) => showToast(`关闭录制失败：${e}`, "warn"));
+  }
+
+  async function recordingOn() {
+    if (recording) return;
+    recording = true;
+    try {
+      await setRecording(true);
+    } catch (e) {
+      recording = false;
+      showToast(`无法进入录制状态：${e}`, "warn");
+    }
+  }
+
+  function recordingOff() {
+    notifyRecordingOff();
+    recording = false;
   }
 
   /** 把主题选择立刻套到 <html>：system = 跟随系统（去掉属性），其余写成 light/dark。 */
@@ -120,6 +151,12 @@
     if (e.kind === "image") return `图片 ${e.width ?? "?"}×${e.height ?? "?"}`;
     const text = (e.content ?? "").slice(0, 24).replace(/\r?\n/g, "↵");
     return text || "（空文本）";
+  }
+
+  /** 悬浮提示用：图片给路径、文本给前 200 字。 */
+  function slotFullText(e: ClipEntry): string {
+    if (e.kind === "image") return e.imagePath ?? slotPreview(e);
+    return (e.content ?? "").slice(0, 200) || "（空文本）";
   }
 
   async function refreshSlots() {
@@ -257,7 +294,18 @@
     return [...mods, key].join("+");
   }
 
-  function captureHotkey(e: KeyboardEvent) {
+  function onHotkeyFocus() {
+    if (!cfg) return;
+    hotkeyEl?.select();
+    void recordingOn();
+  }
+
+  /** blur 也要兜底关掉录制（用户点到别处、切窗口、窗口失焦都会走这里）。 */
+  function onHotkeyBlur() {
+    recordingOff();
+  }
+
+  async function captureHotkey(e: KeyboardEvent) {
     e.preventDefault();
     if (!cfg) return;
     const s = shortcutFromEvent(e);
@@ -267,26 +315,13 @@
     }
     if (isDangerous(s)) {
       showToast(dangerousHint(s), "warn");
+      recordingOff();
       return;
     }
     cfg.hotkey = s;
     markDirty();
-  }
-
-  function captureSlot(e: KeyboardEvent, slot: number) {
-    e.preventDefault();
-    if (!cfg) return;
-    const s = shortcutFromEvent(e);
-    if (!s) {
-      showToast("请按「修饰键 + 主键」组合", "warn");
-      return;
-    }
-    if (isDangerous(s)) {
-      showToast(dangerousHint(s), "warn");
-      return;
-    }
-    cfg.slotHotkeys[slot - 1] = s;
-    markDirty();
+    recordingOff();
+    showToast(`已录到 ${s}，点右上角「保存」后生效`);
   }
 
   onMount(async () => {
@@ -314,6 +349,8 @@
 
   onDestroy(() => {
     clearTimeout(toastTimer);
+    // 兜底：面板被关掉 / 组件卸载时绝不能把全局热键留在「录制中」状态。
+    notifyRecordingOff();
     for (const un of unlisteners) un();
   });
 </script>
@@ -402,43 +439,51 @@
         <span>呼出浮层</span>
         <input
           class="hotkey"
+          class:recording
           readonly
           value={cfg.hotkey}
+          placeholder="请按下组合键…"
+          bind:this={hotkeyEl}
           onkeydown={captureHotkey}
-          onfocus={(e) => e.currentTarget.select()}
+          onfocus={onHotkeyFocus}
+          onblur={onHotkeyBlur}
         />
       </label>
+      <p class="hotkey-hint faint">
+        点进输入框后直接按下组合键即可录制；<strong>录制完要点右上角「保存」才会生效</strong>。
+      </p>
 
       <div class="slots">
         <span class="slots-label">置顶槽直贴</span>
-        <div class="slot-grid">
-          {#each cfg.slotHotkeys as s, i}
-            <div class="slot">
+        <p class="muted note slot-note">
+          空槽（在浮层里选中条目按 F2 置顶，或按本槽热键 Ctrl+Shift+N 直接贴过去）
+        </p>
+        <div class="slot-rows">
+          {#each Array(9) as _, i}
+            {@const entry = slots[i]}
+            <div class="slot-row">
               <span class="slot-no faint">槽 {i + 1}</span>
-              <input
-                class="hotkey small"
-                readonly
-                value={s}
-                onkeydown={(e) => captureSlot(e, i + 1)}
-                title={`点这里录制槽位 ${i + 1} 的热键`}
-              />
-              <div class="slot-entry">
-                {#if slots[i]}
-                  <span class="slot-text" title={slots[i].kind === "image" ? "" : slots[i].content ?? ""}>
-                    {slotPreview(slots[i])}
-                  </span>
-                  <button
-                    class="btn tiny"
-                    type="button"
-                    title={`取消槽 ${i + 1} 的置顶`}
-                    onclick={() => clearSlot(i + 1)}>清空</button
-                  >
-                {:else}
-                  <span class="slot-empty faint"
-                    >空槽（在浮层里 Ctrl+P 置顶，或选中条目后按本槽热键 {s} 直接贴过去）</span
-                  >
-                {/if}
+              <div
+                class="slot-content"
+                class:empty={!entry}
+                title={entry ? slotFullText(entry) : "该槽还没有置顶内容"}
+              >
+                {entry ? slotPreview(entry) : "空槽"}
               </div>
+              <span
+                class="kbd slot-kbd"
+                title="槽位热键固定为 Ctrl+Shift+{i + 1}，不可修改"
+              >Ctrl+Shift+{i + 1}</span>
+              {#if entry}
+                <button
+                  class="btn tiny"
+                  type="button"
+                  title={`取消槽 ${i + 1} 的置顶`}
+                  onclick={() => clearSlot(i + 1)}>清空</button
+                >
+              {:else}
+                <span class="slot-holder"></span>
+              {/if}
             </div>
           {/each}
         </div>
@@ -523,12 +568,19 @@
     gap: 14px;
   }
 
+  /* 页头吸顶：滚到底部改设置时「保存」按钮始终看得见。 */
   header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     gap: 16px;
-    padding-bottom: 4px;
+    padding: 8px 0 10px;
+    margin-top: -8px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
   }
 
   h1 {
@@ -616,11 +668,27 @@
     cursor: pointer;
   }
 
-  .hotkey.small {
-    max-width: none;
-    width: 100%;
-    padding: 6px 8px;
+  /* 录制中：边框点亮 + 轻微光晕，让用户明确知道「现在在录」。 */
+  .hotkey.recording {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  .hotkey.recording::placeholder {
+    color: var(--accent);
+    opacity: 1;
+  }
+
+  .hotkey-hint {
+    margin: -2px 0 10px;
+    padding-left: 130px;
     font-size: 11.5px;
+    line-height: 1.5;
+  }
+
+  .hotkey-hint strong {
+    color: var(--fg);
+    font-weight: 650;
   }
 
   .slots {
@@ -634,66 +702,63 @@
     margin-bottom: 8px;
   }
 
-  .slot-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 10px 12px;
+  .slot-note {
+    margin: 8px 0 0;
   }
 
-  .slot {
+  .slot-rows {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 6px;
+  }
+
+  .slot-row {
+    display: flex;
+    align-items: center;
+    gap: 9px;
     min-width: 0;
   }
 
   .slot-no {
+    flex: none;
+    width: 34px;
     font-size: 11px;
     letter-spacing: 0.02em;
   }
 
-  /* 槽位输入框不在 `.field` 里，吃不到那条基础样式，会退化成浏览器默认的
-     浅底 + 浅色文字（看起来像禁用）。这里补齐同样的边框 / 底色 / 内边距。 */
-  .slot-grid input {
-    width: 100%;
-    padding: 6px 8px;
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-sm);
-    background: var(--bg-sunken);
-    color: var(--fg);
-    outline: none;
-  }
-
-  .slot-grid input:hover {
-    border-color: var(--accent);
-  }
-
-  .slot-grid input:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
-  }
-
-  .slot-entry {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 17px;
-    font-size: 11px;
-    line-height: 1.35;
-  }
-
-  .slot-text {
+  /* 内容预览框：`.path` 的观感（sunken 底 + 1px 边 + mono 小字），flex: 1 占满。 */
+  .slot-content {
     flex: 1;
     min-width: 0;
+    padding: 6px 9px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-sunken);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--fg);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--fg);
   }
 
-  .slot-empty {
-    flex: 1;
+  .slot-content.empty {
     color: var(--fg-faint);
+  }
+
+  .slot-kbd {
+    flex: none;
+    min-width: 74px;
+    height: auto;
+    padding: 3px 6px;
+    color: var(--fg-muted);
+  }
+
+  /* 空槽时占住「清空」按钮的宽度，保证每一行的快捷键列对齐。 */
+  .slot-holder {
+    flex: none;
+    width: 34px;
   }
 
   .btn.tiny {
@@ -770,15 +835,25 @@
     margin: 10px 0 0;
   }
 
+  /* 固定悬浮：滚到页面任何位置都能看到反馈。 */
   .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 22px;
+    transform: translateX(-50%);
+    z-index: 60;
+    max-width: 88vw;
     padding: 8px 13px;
     border-radius: var(--radius-sm);
-    background: var(--accent-soft);
+    box-shadow: var(--shadow);
+    /* accent-soft 是半透明的，悬浮层下面会透出正文，这里混一点不透明底色。 */
+    background: color-mix(in srgb, var(--accent-soft) 75%, var(--bg-elev));
     font-size: 12.5px;
+    text-align: center;
   }
 
   .toast.warn {
-    background: color-mix(in srgb, var(--warn) 18%, transparent);
+    background: color-mix(in srgb, var(--warn) 22%, var(--bg-elev));
   }
 
   .mono {

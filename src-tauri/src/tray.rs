@@ -13,7 +13,6 @@ use crate::commands::{hide_overlay_window, show_window};
 
 pub const ID_SHOW: &str = "clipstack.show";
 pub const ID_PAUSE: &str = "clipstack.pause";
-pub const ID_HINT: &str = "clipstack.hint";
 pub const ID_SETTINGS: &str = "clipstack.settings";
 pub const ID_QUIT: &str = "clipstack.quit";
 
@@ -36,7 +35,6 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .item(&MenuItemBuilder::with_id(ID_SHOW, "打开剪贴板历史").build(app)?)
         .separator()
         .item(&pause_item)
-        .item(&MenuItemBuilder::with_id(ID_HINT, "使用提示…").build(app)?)
         .item(&MenuItemBuilder::with_id(ID_SETTINGS, "设置…").build(app)?)
         .separator()
         .item(&MenuItemBuilder::with_id(ID_QUIT, "退出 clipstack").build(app)?)
@@ -60,13 +58,6 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             match id.as_str() {
                 ID_SHOW => crate::commands::show_overlay(app, &state),
                 ID_SETTINGS => show_window(app, SETTINGS),
-                ID_HINT => {
-                    let hk = state.config().hotkey;
-                    crate::commands::set_startup_hint(format!(
-                        "按 {hk} 呼出历史 · ↑↓ 选择、回车粘贴 · 双击托盘图标也能呼出"
-                    ));
-                    crate::commands::show_overlay(app, &state);
-                }
                 ID_PAUSE => {
                     let paused = state.toggle_paused();
                     sync_pause_state(app, paused);

@@ -58,6 +58,20 @@ fn main() {
         Some("--settings") => clipstack_lib::run_with(clipstack_lib::StartWindow::Settings),
         // 启动后直接呼出浮层
         Some("--overlay") => clipstack_lib::run_with(clipstack_lib::StartWindow::Overlay),
+        // 运维/自检入口：数据目录现在可以改，所以也给它命令行入口
+        Some("--data-dir") => {
+            println!("{}", clipstack_lib::config::data_dir_report());
+        }
+        Some("--migrate-data") => {
+            let Some(target) = args.get(1) else {
+                println!("用法: clipstack --migrate-data <目录>");
+                std::process::exit(2);
+            };
+            std::process::exit(if clipstack_lib::config::migrate_data_dir_cli(target) { 0 } else { 1 });
+        }
+        Some("--reset-data-dir") => {
+            std::process::exit(if clipstack_lib::config::reset_data_dir_cli() { 0 } else { 1 });
+        }
         _ => clipstack_lib::run(),
     }
 }

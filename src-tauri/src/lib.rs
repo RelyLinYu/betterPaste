@@ -75,6 +75,10 @@ pub fn rebind_hotkeys(app: &tauri::AppHandle, state: &Arc<AppState>) -> Result<(
     let app_for_overlay = app.clone();
     let state_for_overlay = state.clone();
     let overlay_res = hotkey::register_overlay_hotkey(app, &cfg.hotkey, move || {
+        // 设置面板正在录热键：这次按键是要被录进去的，不能拿去弹浮层
+        if state_for_overlay.is_recording() {
+            return;
+        }
         commands::show_overlay(&app_for_overlay, &state_for_overlay);
     });
 
@@ -82,6 +86,9 @@ pub fn rebind_hotkeys(app: &tauri::AppHandle, state: &Arc<AppState>) -> Result<(
     let state_for_slot = state.clone();
     // 槽位热键单独注册：浮层热键被别的程序占用时，1~9 直贴不该跟着一起废掉
     let slot_res = hotkey::register_slot_hotkeys(app, &cfg.slot_hotkeys, move |slot| {
+        if state_for_slot.is_recording() {
+            return;
+        }
         let entry = state_for_slot.store.lock().get_pinned(slot).ok().flatten();
         let Some(entry) = entry else {
             log::debug!("槽位 {slot} 是空的");
@@ -163,7 +170,8 @@ pub fn run_with(start: StartWindow) {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            // 开机自启时带上这个参数：启动就不再弹浮层打扰（手动双击才弹）
+            Some(vec!["--autostart"]),
         ))
         .plugin(
             tauri_plugin_log::Builder::new()
@@ -214,15 +222,40 @@ pub fn run_with(start: StartWindow) {
                 }
             }
 
-            // 首次运行（还没有 config.json）时给点反馈：直接亮出浮层并附一句提示，
-            // 否则用户双击之后"什么都没发生"，只有托盘里多了一个图标。
-            let first_run = paths::config_path().map(|p| !p.exists()).unwrap_or(false);
-            if first_run {
-                commands::set_startup_hint(format!(
-                    "clipstack 已在后台运行 · 随时按 {} 呼出历史（右上角 ⚙ 打开设置）",
-                    cfg.hotkey
-                ));
+            // 手动启动（双击 exe）时给点反馈：直接亮出浮层 + 一句话，
+            // 否则用户"双击之后什么都没发生"，只有托盘里多了一个图标。
+            // 开机自启会带 --autostart，那就不打扰。
+            let autostarted = std::env::args().any(|a| a == "--autostart");
+            if !autostarted {
+                let first_run = paths::config_path().map(|p| !p.exists()).unwrap_or(false);
+                let hint = if first_run {
+                    format!(
+                        "第一次使用：按 {} 呼出历史，右上角 ⚙ 是设置；关掉这个窗口后 clipstack 仍会在托盘里继续记录",
+                        cfg.hotkey
+                    )
+                } else {
+                    format!(
+                        "clipstack 已在托盘里运行（右键托盘图标有菜单）· 按 {} 呼出历史",
+                        cfg.hotkey
+                    )
+                };
+                commands::set_startup_hint(hint);
+                // 保护期：双击启动时刚弹出的提示别被"抢焦点"秒收掉（实测 1 秒内就没了）
+                state.set_launch_guard(4000);
                 commands::show_overlay(&handle, &state);
+                // 启动提示只当"打过招呼"：6 秒后自动收起，避免出现
+                // "浮层既没焦点又赖在屏幕上、Esc 也送不进去"的卡死状态。
+                // 窗口操作必须在主线程执行（跨线程直接调 hide 不会生效）。
+                let h = handle.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(6000));
+                    let h2 = h.clone();
+                    let _ = h.run_on_main_thread(move || {
+                        if let Some(w) = h2.get_webview_window(OVERLAY) {
+                            let _ = w.hide();
+                        }
+                    });
+                });
             }
 
             // --settings / --overlay：启动后直接亮出对应的窗口
@@ -240,9 +273,16 @@ pub fn run_with(start: StartWindow) {
             WindowEvent::Focused(false) => {
                 if window.label() == OVERLAY {
                     if let Some(state) = window.try_state::<Arc<AppState>>() {
-                        if state.config().hide_on_blur {
+                        // 启动保护期内不收起：双击启动的提示条要看得见（实测会 1 秒内被收掉）
+                        if state.config().hide_on_blur && !state.launch_guard_active() {
                             let _ = window.hide();
                         }
+                    }
+                } else if window.label() == SETTINGS {
+                    // 兜底：设置窗口一旦失焦就退出"录制热键"状态，
+                    // 否则全局热键会一直处于被吞掉的状态
+                    if let Some(state) = window.try_state::<Arc<AppState>>() {
+                        state.set_recording(false);
                     }
                 }
             }
@@ -270,6 +310,7 @@ pub fn run_with(start: StartWindow) {
             commands::set_config,
             commands::set_paused,
             commands::get_paused,
+            commands::set_recording,
             commands::data_dir,
             commands::open_data_dir,
             commands::migrate_data_dir,
