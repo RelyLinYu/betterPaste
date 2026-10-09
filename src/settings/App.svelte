@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import {
     getConfig,
     setConfig,
@@ -8,10 +9,33 @@
     getPaused,
     dataDir,
     formatBytes,
+    pinnedSlots,
+    pinEntry,
+    openDataDir,
+    migrateDataDir,
+    resetDataDir,
+    restartApp,
+    EVENT_CONFIG_CHANGED,
     type AppConfig,
+    type ClipEntry,
     type ThemeMode,
   } from "../lib/api";
   import { applyTheme } from "../lib/theme";
+
+  /** 后端在剪贴板历史发生变化时推送的事件（浮层里改动置顶后靠它同步）。 */
+  const EVENT_CHANGED = "clipstack://changed";
+
+  /** 这些组合被系统/常见应用占用，抢到手会直接破坏用户的日常操作。 */
+  const DANGEROUS_HOTKEYS = new Set([
+    "Ctrl+V",
+    "Ctrl+C",
+    "Ctrl+X",
+    "Ctrl+Z",
+    "Ctrl+A",
+    "Ctrl+S",
+    "Ctrl+P",
+    "Ctrl+F",
+  ]);
 
   let cfg: AppConfig | null = null;
   let dir = "";
@@ -22,6 +46,14 @@
   let saving = false;
   let dirty = false;
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
+  let unlisteners: UnlistenFn[] = [];
+
+  /** 9 个置顶槽当前的内容（下标 0 = 槽 1，空槽是 null）。 */
+  let slots: (ClipEntry | null)[] = Array.from({ length: 9 }, () => null);
+  /** 「数据位置」卡片里可编辑的目标目录，默认填当前目录。 */
+  let dirInput = "";
+  let migrating = false;
+  let resettingDir = false;
 
   const DEFAULTS: AppConfig = {
     maxEntries: 500,
@@ -51,6 +83,112 @@
     savedAt = "";
   }
 
+  /** 把主题选择立刻套到 <html>：system = 跟随系统（去掉属性），其余写成 light/dark。 */
+  function applyThemeNow(mode: ThemeMode) {
+    if (mode === "system") document.documentElement.removeAttribute("data-theme");
+    else document.documentElement.setAttribute("data-theme", mode);
+  }
+
+  function onThemeChange(e: Event) {
+    applyThemeNow((e.currentTarget as HTMLSelectElement).value as ThemeMode);
+    markDirty();
+  }
+
+  /** 录到这些组合时给出具体到键位的提示，别只说"不行"。 */
+  const KEY_MEANING: Record<string, string> = {
+    V: "粘贴",
+    C: "复制",
+    X: "剪切",
+    Z: "撤销",
+    A: "全选",
+    S: "保存",
+    P: "打印",
+    F: "查找",
+  };
+
+  function dangerousHint(s: string): string {
+    const key = s.slice("Ctrl+".length);
+    return `${s} 是系统${KEY_MEANING[key] ?? "快捷键"}，注册后会被浮层抢走、任何地方都用不了，请换一个组合（例如 Ctrl+Shift+${key}）`;
+  }
+
+  function isDangerous(s: string): boolean {
+    return DANGEROUS_HOTKEYS.has(s);
+  }
+
+  /** 槽位内容的单行预览：文本取前 24 字（换行 → ↵），图片给出尺寸。 */
+  function slotPreview(e: ClipEntry): string {
+    if (e.kind === "image") return `图片 ${e.width ?? "?"}×${e.height ?? "?"}`;
+    const text = (e.content ?? "").slice(0, 24).replace(/\r?\n/g, "↵");
+    return text || "（空文本）";
+  }
+
+  async function refreshSlots() {
+    try {
+      slots = await pinnedSlots();
+    } catch (e) {
+      showToast(`无法读取置顶槽：${e}`, "warn");
+    }
+  }
+
+  async function clearSlot(slot: number) {
+    const entry = slots[slot - 1];
+    if (!entry) return;
+    try {
+      await pinEntry(entry.id, null);
+      showToast(`已取消槽 ${slot} 的置顶`);
+      await refreshSlots();
+    } catch (e) {
+      showToast(String(e), "warn");
+    }
+  }
+
+  async function openDir() {
+    try {
+      await openDataDir();
+    } catch (e) {
+      showToast(String(e), "warn");
+    }
+  }
+
+  async function migrateDir() {
+    const target = dirInput.trim();
+    if (!target) {
+      showToast("请先填写目标目录", "warn");
+      return;
+    }
+    if (
+      !confirm(
+        `确定把数据目录迁移到：\n${target}\n\n会把现有历史 / 图片 / 配置复制到新目录，原目录保留不删，随后自动重启生效。`
+      )
+    )
+      return;
+    migrating = true;
+    try {
+      const next = await migrateDataDir(target);
+      showToast(`已迁移到 ${next}，正在重启…`);
+      await restartApp();
+    } catch (e) {
+      showToast(String(e), "warn");
+    } finally {
+      migrating = false;
+    }
+  }
+
+  async function restoreDefaultDir() {
+    if (!confirm("确定恢复默认数据目录吗？\n\n会记录回默认位置，随后自动重启生效；当前目录的数据不会被删除。"))
+      return;
+    resettingDir = true;
+    try {
+      const next = await resetDataDir();
+      showToast(`已恢复默认位置 ${next}，正在重启…`);
+      await restartApp();
+    } catch (e) {
+      showToast(String(e), "warn");
+    } finally {
+      resettingDir = false;
+    }
+  }
+
   async function save() {
     if (!cfg) return;
     saving = true;
@@ -59,6 +197,7 @@
       dirty = false;
       savedAt = new Date().toLocaleTimeString();
       await applyTheme();
+      await refreshSlots();
       showToast("已保存");
     } catch (e) {
       showToast(String(e), "warn");
@@ -126,6 +265,10 @@
       showToast("请按「修饰键 + 主键」组合，例如 Ctrl+Shift+V", "warn");
       return;
     }
+    if (isDangerous(s)) {
+      showToast(dangerousHint(s), "warn");
+      return;
+    }
     cfg.hotkey = s;
     markDirty();
   }
@@ -138,6 +281,10 @@
       showToast("请按「修饰键 + 主键」组合", "warn");
       return;
     }
+    if (isDangerous(s)) {
+      showToast(dangerousHint(s), "warn");
+      return;
+    }
     cfg.slotHotkeys[slot - 1] = s;
     markDirty();
   }
@@ -147,13 +294,28 @@
       cfg = await getConfig();
       await applyTheme();
       dir = await dataDir();
+      dirInput = dir;
       paused = await getPaused();
     } catch (e) {
       showToast(`无法读取配置：${e}`, "warn");
     }
+    await refreshSlots();
+
+    // 主题在浮层 / 设置面板 / 托盘之间同步；置顶槽在浮层里被改动后也要跟着刷新。
+    unlisteners = await Promise.all([
+      listen(EVENT_CONFIG_CHANGED, () => {
+        void applyTheme().then((mode) => {
+          if (cfg && cfg.theme !== mode) cfg.theme = mode;
+        });
+      }),
+      listen(EVENT_CHANGED, () => void refreshSlots()),
+    ]);
   });
 
-  onDestroy(() => clearTimeout(toastTimer));
+  onDestroy(() => {
+    clearTimeout(toastTimer);
+    for (const un of unlisteners) un();
+  });
 </script>
 
 <div class="wrap">
@@ -251,13 +413,33 @@
         <span class="slots-label">置顶槽直贴</span>
         <div class="slot-grid">
           {#each cfg.slotHotkeys as s, i}
-            <input
-              class="hotkey small"
-              readonly
-              value={s}
-              onkeydown={(e) => captureSlot(e, i + 1)}
-              title={`槽位 ${i + 1}`}
-            />
+            <div class="slot">
+              <span class="slot-no faint">槽 {i + 1}</span>
+              <input
+                class="hotkey small"
+                readonly
+                value={s}
+                onkeydown={(e) => captureSlot(e, i + 1)}
+                title={`点这里录制槽位 ${i + 1} 的热键`}
+              />
+              <div class="slot-entry">
+                {#if slots[i]}
+                  <span class="slot-text" title={slots[i].kind === "image" ? "" : slots[i].content ?? ""}>
+                    {slotPreview(slots[i])}
+                  </span>
+                  <button
+                    class="btn tiny"
+                    type="button"
+                    title={`取消槽 ${i + 1} 的置顶`}
+                    onclick={() => clearSlot(i + 1)}>清空</button
+                  >
+                {:else}
+                  <span class="slot-empty faint"
+                    >空槽（在浮层里 Ctrl+P 置顶，或选中条目后按本槽热键 {s} 直接贴过去）</span
+                  >
+                {/if}
+              </div>
+            </div>
           {/each}
         </div>
       </div>
@@ -276,11 +458,12 @@
 
       <label class="field">
         <span>界面主题</span>
-        <select bind:value={cfg.theme} onchange={markDirty}>
+        <select bind:value={cfg.theme} onchange={onThemeChange}>
           <option value="system">跟随系统</option>
           <option value="light">浅色</option>
           <option value="dark">深色</option>
         </select>
+        <em class="muted">改完立即生效，无需保存</em>
       </label>
 
       <label class="switch">
@@ -295,9 +478,32 @@
       <p class="muted note">
         数据库、图片与缩略图都在这里。完全离线运行，不会向任何服务器发送数据。
       </p>
+
+      <div class="field">
+        <span>目标目录</span>
+        <input
+          class="mono dir-input"
+          type="text"
+          bind:value={dirInput}
+          placeholder="例如 D:\clipstack-data"
+          spellcheck="false"
+        />
+      </div>
+
       <div class="danger-row">
+        <button class="btn" onclick={openDir}>打开目录</button>
+        <button class="btn primary" onclick={migrateDir} disabled={migrating}>
+          {migrating ? "迁移中…" : "迁移并重启"}
+        </button>
+        <button class="btn" onclick={restoreDefaultDir} disabled={resettingDir}>
+          {resettingDir ? "处理中…" : "恢复默认位置"}
+        </button>
         <button class="btn" onclick={resetDefaults}>恢复默认设置</button>
       </div>
+
+      <p class="muted note after-actions">
+        迁移会把现有历史 / 图片 / 配置复制到新目录（原目录保留不删），重启后生效。
+      </p>
     </section>
 
     <footer class="foot muted">
@@ -413,7 +619,7 @@
   .hotkey.small {
     max-width: none;
     width: 100%;
-    padding: 5px 7px;
+    padding: 6px 8px;
     font-size: 11.5px;
   }
 
@@ -431,7 +637,70 @@
   .slot-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 7px;
+    gap: 10px 12px;
+  }
+
+  .slot {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  .slot-no {
+    font-size: 11px;
+    letter-spacing: 0.02em;
+  }
+
+  /* 槽位输入框不在 `.field` 里，吃不到那条基础样式，会退化成浏览器默认的
+     浅底 + 浅色文字（看起来像禁用）。这里补齐同样的边框 / 底色 / 内边距。 */
+  .slot-grid input {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg-sunken);
+    color: var(--fg);
+    outline: none;
+  }
+
+  .slot-grid input:hover {
+    border-color: var(--accent);
+  }
+
+  .slot-grid input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  .slot-entry {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 17px;
+    font-size: 11px;
+    line-height: 1.35;
+  }
+
+  .slot-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg);
+  }
+
+  .slot-empty {
+    flex: 1;
+    color: var(--fg-faint);
+  }
+
+  .btn.tiny {
+    flex: none;
+    padding: 1px 6px;
+    font-size: 10.5px;
+    line-height: 1.5;
   }
 
   .switch {
@@ -490,6 +759,15 @@
     gap: 8px;
     margin-top: 12px;
     flex-wrap: wrap;
+  }
+
+  .dir-input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .after-actions {
+    margin: 10px 0 0;
   }
 
   .toast {

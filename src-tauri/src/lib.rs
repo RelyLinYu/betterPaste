@@ -22,6 +22,51 @@ use tauri::{Manager, WindowEvent};
 use app::{AppState, OVERLAY, SETTINGS};
 use config::AppConfig;
 
+/// 关掉 WebView2 自带的浏览器快捷键。
+///
+/// 默认情况下 WebView2 会把 `Ctrl+P`（打印）、`F5`/`Ctrl+R`（刷新）、`Ctrl+F`（查找）等
+/// 当成浏览器行为先处理掉，页面里的 `keydown` 根本收不到——浮层里 `Ctrl+P = 置顶`
+/// 因此完全失效（还会弹出一个打印对话框）。关掉之后这些按键才回到我们自己手里。
+#[cfg(windows)]
+fn tame_webview_accelerators(window: &tauri::WebviewWindow) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+    use windows62::core::Interface;
+    let label = window.label().to_string();
+    let outer_label = label.clone();
+    if let Err(e) = window.with_webview(move |webview| {
+        let controller = webview.controller();
+        unsafe {
+            let core = match controller.CoreWebView2() {
+                Ok(c) => c,
+                Err(e) => {
+                    log::warn!("取 CoreWebView2 失败（{label}）: {e}");
+                    return;
+                }
+            };
+            let settings = match core.Settings() {
+                Ok(s) => s,
+                Err(e) => {
+                    log::warn!("取 WebView2 设置失败（{label}）: {e}");
+                    return;
+                }
+            };
+            match settings.cast::<ICoreWebView2Settings3>() {
+                Ok(s3) => {
+                    if let Err(e) = s3.SetAreBrowserAcceleratorKeysEnabled(false) {
+                        log::warn!("关闭浏览器快捷键失败（{label}）: {e}");
+                    }
+                }
+                Err(e) => log::warn!("WebView2 版本过旧，无法关闭浏览器快捷键（{label}）: {e}"),
+            }
+        }
+    }) {
+        log::warn!("with_webview 调用失败（{outer_label}）: {e}");
+    }
+}
+
+#[cfg(not(windows))]
+fn tame_webview_accelerators(_window: &tauri::WebviewWindow) {}
+
 /// 注册浮层与置顶槽热键。
 pub fn rebind_hotkeys(app: &tauri::AppHandle, state: &Arc<AppState>) -> Result<()> {
     hotkey::unregister_all(app);
@@ -155,6 +200,31 @@ pub fn run_with(start: StartWindow) {
             tray::build(&handle)?;
             clipboard::spawn_watcher(state.clone());
 
+            // 图片预览走 asset 协议：scope 在运行时放开（数据目录是可配置的）
+            if let Ok(dir) = paths::data_dir() {
+                if let Err(e) = app.asset_protocol_scope().allow_directory(&dir, true) {
+                    log::warn!("asset 协议目录授权失败: {e}");
+                }
+            }
+
+            // 两个窗口都不要 WebView2 的浏览器快捷键（打印/刷新/查找…）
+            for label in [OVERLAY, SETTINGS] {
+                if let Some(w) = app.get_webview_window(label) {
+                    tame_webview_accelerators(&w);
+                }
+            }
+
+            // 首次运行（还没有 config.json）时给点反馈：直接亮出浮层并附一句提示，
+            // 否则用户双击之后"什么都没发生"，只有托盘里多了一个图标。
+            let first_run = paths::config_path().map(|p| !p.exists()).unwrap_or(false);
+            if first_run {
+                commands::set_startup_hint(format!(
+                    "clipstack 已在后台运行 · 随时按 {} 呼出历史（右上角 ⚙ 打开设置）",
+                    cfg.hotkey
+                ));
+                commands::show_overlay(&handle, &state);
+            }
+
             // --settings / --overlay：启动后直接亮出对应的窗口
             match start {
                 StartWindow::Overlay => commands::show_overlay(&handle, &state),
@@ -189,6 +259,8 @@ pub fn run_with(start: StartWindow) {
             commands::search_entries,
             commands::pin_entry,
             commands::delete_entry,
+            commands::delete_entries,
+            commands::pinned_slots,
             commands::copy_entry,
             commands::clear_entries,
             commands::paste_entry,
@@ -199,6 +271,11 @@ pub fn run_with(start: StartWindow) {
             commands::set_paused,
             commands::get_paused,
             commands::data_dir,
+            commands::open_data_dir,
+            commands::migrate_data_dir,
+            commands::reset_data_dir,
+            commands::restart_app,
+            commands::take_startup_hint,
             commands::open_settings,
             commands::hide_overlay,
         ])

@@ -1,9 +1,9 @@
-//! System tray: 打开 / 暂停记录 / 设置 / 退出。
+//! System tray: 打开 / 暂停记录 / 使用提示 / 设置 / 退出。
 
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -13,16 +13,30 @@ use crate::commands::{hide_overlay_window, show_window};
 
 pub const ID_SHOW: &str = "clipstack.show";
 pub const ID_PAUSE: &str = "clipstack.pause";
+pub const ID_HINT: &str = "clipstack.hint";
 pub const ID_SETTINGS: &str = "clipstack.settings";
 pub const ID_QUIT: &str = "clipstack.quit";
 
 pub const TRAY_ID: &str = "clipstack";
 
+/// 托盘菜单里的「暂停记录剪贴板」项：勾选状态要随暂停状态变，因此留一个把手。
+static PAUSE_ITEM: OnceLock<CheckMenuItem<tauri::Wry>> = OnceLock::new();
+
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
+    let hotkey = app.state::<Arc<AppState>>().inner().config().hotkey;
+    let paused_now = app.state::<Arc<AppState>>().inner().paused.load(Ordering::Relaxed);
+
+    // 勾选状态 = "已暂停"；名字说清楚它管的是"记录剪贴板"这件事
+    let pause_item = CheckMenuItemBuilder::with_id(ID_PAUSE, "暂停记录剪贴板")
+        .checked(paused_now)
+        .build(app)?;
+    let _ = PAUSE_ITEM.set(pause_item.clone());
+
     let menu = MenuBuilder::new(app)
         .item(&MenuItemBuilder::with_id(ID_SHOW, "打开剪贴板历史").build(app)?)
         .separator()
-        .item(&MenuItemBuilder::with_id(ID_PAUSE, "暂停 / 恢复记录").build(app)?)
+        .item(&pause_item)
+        .item(&MenuItemBuilder::with_id(ID_HINT, "使用提示…").build(app)?)
         .item(&MenuItemBuilder::with_id(ID_SETTINGS, "设置…").build(app)?)
         .separator()
         .item(&MenuItemBuilder::with_id(ID_QUIT, "退出 clipstack").build(app)?)
@@ -32,7 +46,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         // 右键出菜单；双击呼出浮层，避免和菜单抢左键
         .show_menu_on_left_click(false)
-        .tooltip(tooltip(false))
+        .tooltip(tooltip(&hotkey, false))
         .on_tray_icon_event(|tray, event| {
             if matches!(event, TrayIconEvent::DoubleClick { .. }) {
                 let app = tray.app_handle().clone();
@@ -46,6 +60,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             match id.as_str() {
                 ID_SHOW => crate::commands::show_overlay(app, &state),
                 ID_SETTINGS => show_window(app, SETTINGS),
+                ID_HINT => {
+                    let hk = state.config().hotkey;
+                    crate::commands::set_startup_hint(format!(
+                        "按 {hk} 呼出历史 · ↑↓ 选择、回车粘贴 · 双击托盘图标也能呼出"
+                    ));
+                    crate::commands::show_overlay(app, &state);
+                }
                 ID_PAUSE => {
                     let paused = state.toggle_paused();
                     sync_pause_state(app, paused);
@@ -74,18 +95,22 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// 把「暂停 / 记录中」反映到托盘提示上（设置面板里切换时也会调用）。
+/// 把「暂停 / 记录中」反映到托盘提示与菜单勾选上（设置面板里切换时也会调用）。
 pub fn sync_pause_state(app: &AppHandle, paused: bool) {
+    let hotkey = app.state::<Arc<AppState>>().inner().config().hotkey;
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_tooltip(Some(tooltip(paused)));
+        let _ = tray.set_tooltip(Some(tooltip(&hotkey, paused)));
+    }
+    if let Some(item) = PAUSE_ITEM.get() {
+        let _ = item.set_checked(paused);
     }
 }
 
-fn tooltip(paused: bool) -> String {
+fn tooltip(hotkey: &str, paused: bool) -> String {
     if paused {
-        "clipstack — 已暂停记录".to_string()
+        format!("clipstack — 已暂停记录（{hotkey} 呼出）")
     } else {
-        "clipstack — 剪贴板历史".to_string()
+        format!("clipstack — 正在记录（{hotkey} 呼出）")
     }
 }
 

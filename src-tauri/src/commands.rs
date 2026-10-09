@@ -56,6 +56,21 @@ pub fn delete_entry(state: State<'_, std::sync::Arc<AppState>>, id: String) -> R
     Ok(())
 }
 
+/// 批量删除（浮层勾选多条后一次删掉）。返回真正删掉的条数。
+#[tauri::command]
+pub fn delete_entries(state: State<'_, std::sync::Arc<AppState>>, ids: Vec<String>) -> Result<u32> {
+    let n = state.store.lock().delete_many(&ids)?;
+    state.notify_changed();
+    Ok(n)
+}
+
+/// 槽位 1~9 当前置顶的条目（空的为 `null`），设置面板与浮层都用它。
+#[tauri::command]
+pub fn pinned_slots(state: State<'_, std::sync::Arc<AppState>>) -> Result<Vec<Option<ClipEntry>>> {
+    let store = state.store.lock();
+    (1..=9u8).map(|slot| store.get_pinned(slot)).collect()
+}
+
 #[tauri::command]
 pub fn copy_entry(state: State<'_, std::sync::Arc<AppState>>, id: String) -> Result<()> {
     let entry = state.store.lock().get(&id)?.ok_or_else(|| crate::Error::Other("记录不存在".into()))?;
@@ -150,6 +165,16 @@ pub fn set_config(
     next.hotkey = hotkey::normalize(&next.hotkey);
     next.slot_hotkeys = next.slot_hotkeys.iter().map(|k| hotkey::normalize(k)).collect();
 
+    // 危险组合（Ctrl+V 之类）注册后会抢走系统功能，直接拒绝并说明原因
+    if let Some(reason) = hotkey::danger_reason(&next.hotkey) {
+        return Err(crate::Error::Hotkey(reason));
+    }
+    for (i, k) in next.slot_hotkeys.iter().enumerate() {
+        if let Some(reason) = hotkey::danger_reason(k) {
+            return Err(crate::Error::Hotkey(format!("槽位 {}：{reason}", i + 1)));
+        }
+    }
+
     state.update_config(next.clone());
 
     if old.hotkey != next.hotkey || old.slot_hotkeys != next.slot_hotkeys {
@@ -172,6 +197,8 @@ pub fn set_config(
         apply_autostart(&app, next.autostart);
     }
     state.notify_changed();
+    // 主题之类的改动要让已经打开的浮层也立刻跟上
+    state.notify_config();
     Ok(next)
 }
 
@@ -200,6 +227,85 @@ pub fn get_paused(state: State<'_, std::sync::Arc<AppState>>) -> bool {
 #[tauri::command]
 pub fn data_dir() -> Result<String> {
     Ok(paths::data_dir()?.to_string_lossy().to_string())
+}
+
+// --------------------------------------------------------------- 数据目录
+
+/// 启动提示（首次运行、托盘「使用提示」）。前端取一次就清空。
+static STARTUP_HINT: parking_lot::Mutex<Option<String>> = parking_lot::Mutex::new(None);
+
+pub fn set_startup_hint(text: impl Into<String>) {
+    *STARTUP_HINT.lock() = Some(text.into());
+}
+
+#[tauri::command]
+pub fn take_startup_hint() -> Option<String> {
+    STARTUP_HINT.lock().take()
+}
+
+#[tauri::command]
+pub fn open_data_dir(app: AppHandle) -> Result<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = paths::data_dir()?;
+    app.opener()
+        .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| crate::Error::Other(format!("打开数据目录失败: {e}")))?;
+    Ok(())
+}
+
+/// 把现有数据复制到新目录并记下指针，**重启后生效**。返回新目录。
+#[tauri::command]
+pub fn migrate_data_dir(state: State<'_, std::sync::Arc<AppState>>, target: String) -> Result<String> {
+    let trimmed = target.trim().trim_matches('"').trim();
+    if trimmed.is_empty() {
+        return Err(crate::Error::Other("请先填写目标目录".into()));
+    }
+    let target_path = std::path::PathBuf::from(trimmed);
+    std::fs::create_dir_all(&target_path)?;
+    // canonicalize 会带上 Windows 的 \\?\ 前缀，写进 location.txt 很难看，去掉它
+    let target_path = std::fs::canonicalize(&target_path).unwrap_or(target_path);
+    let target_clean = target_path
+        .to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .to_string();
+    let target_path = std::path::PathBuf::from(&target_clean);
+
+    let current = paths::data_dir()?;
+    let current_canon = std::fs::canonicalize(&current).unwrap_or(current.clone());
+    if current_canon == target_path {
+        return Err(crate::Error::Other("目标目录就是当前数据目录".into()));
+    }
+    // 先把 WAL 落回主库：copy_tree 会跳过 -wal/-shm，不 checkpoint 就会漏掉最近的记录
+    state.store.lock().checkpoint()?;
+    let bytes = paths::copy_tree(&current, &target_path)?;
+    paths::set_custom_dir(Some(&target_path))?;
+    log::info!("数据目录迁移到 {}（复制 {} 字节），重启后生效", target_clean, bytes);
+    Ok(target_clean)
+}
+
+/// 恢复默认数据目录（重启后生效）。
+#[tauri::command]
+pub fn reset_data_dir(state: State<'_, std::sync::Arc<AppState>>) -> Result<String> {
+    state.store.lock().checkpoint()?;
+    paths::set_custom_dir(None)?;
+    Ok(paths::bootstrap_dir()?.to_string_lossy().to_string())
+}
+
+/// 延迟重启自己。单实例插件会抢在旧进程退出前把新进程顶掉，所以让新进程等 1.2 秒。
+#[tauri::command]
+pub fn restart_app(app: AppHandle) -> Result<()> {
+    let exe = std::env::current_exe()
+        .map_err(|e| crate::Error::Other(format!("找不到自身路径: {e}")))?;
+    let cmd = format!(
+        "Start-Sleep -Milliseconds 1200; Start-Process -FilePath '{}'",
+        exe.to_string_lossy().replace('\'', "''")
+    );
+    std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &cmd])
+        .spawn()
+        .map_err(|e| crate::Error::Other(format!("重启失败: {e}")))?;
+    app.exit(0);
+    Ok(())
 }
 
 #[tauri::command]

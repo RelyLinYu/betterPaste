@@ -316,6 +316,35 @@ impl Store {
         Ok(())
     }
 
+    /// 批量删除（浮层多选删除）。先提交事务、再删文件。返回真正删除的条数。
+    pub fn delete_many(&mut self, uids: &[String]) -> Result<u32> {
+        if uids.is_empty() {
+            return Ok(0);
+        }
+        let root = paths::data_dir()?;
+        let mut victims: Vec<(Option<String>, Option<String>)> = Vec::new();
+        let tx = self.conn.transaction()?;
+        for uid in uids {
+            let row = tx
+                .query_row(
+                    "SELECT image_path, thumb_path FROM entries WHERE uid = ?1",
+                    params![uid],
+                    |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
+                )
+                .optional()?;
+            if let Some(row) = row {
+                tx.execute("DELETE FROM entries WHERE uid = ?1", params![uid])?;
+                victims.push(row);
+            }
+        }
+        let removed = victims.len() as u32;
+        tx.commit()?;
+        for (img, thumb) in victims {
+            remove_files(root.clone(), [img, thumb]);
+        }
+        Ok(removed)
+    }
+
     /// 清空历史（`keep_pinned` 时保留置顶条目）。单事务批量删除。
     /// 返回删除条数。
     pub fn clear(&mut self, keep_pinned: bool) -> Result<u32> {

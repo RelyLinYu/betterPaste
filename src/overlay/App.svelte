@@ -11,10 +11,15 @@
     copyEntry,
     pinEntry,
     deleteEntry,
+    deleteEntries,
+    pinnedSlots,
+    takeStartupHint,
+    openSettings,
     getConfig,
     hideOverlay,
     formatBytes,
     formatTime,
+    EVENT_CONFIG_CHANGED,
     type AppConfig,
     type ClipEntry,
   } from "../lib/api";
@@ -29,6 +34,13 @@
   let toastKind: "info" | "warn" = "info";
   let searchInput: HTMLInputElement;
   let listEl: HTMLDivElement;
+  /** 勾选（多选删除）的条目 id */
+  let checked = new Set<string>();
+  /** 正在为哪一条挑置顶槽（打开槽位菜单） */
+  let pinMenuFor: string | null = null;
+  /** 槽位 1~9 的占用情况，用来画槽位菜单 */
+  let slots: (ClipEntry | null)[] = [];
+  let lastClicked = -1;
 
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -144,6 +156,86 @@
     }
   }
 
+  /* ---------------------------------------------------------- 多选删除 */
+
+  function toggleChecked(id: string) {
+    const next = new Set(checked);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    checked = next;
+  }
+
+  function setChecked(ids: string[], on: boolean) {
+    const next = new Set(checked);
+    for (const id of ids) {
+      if (on) next.add(id);
+      else next.delete(id);
+    }
+    checked = next;
+  }
+
+  function allChecked() {
+    return entries.length > 0 && entries.every((e) => checked.has(e.id));
+  }
+
+  function toggleAll() {
+    checked = allChecked() ? new Set<string>() : new Set(entries.map((e) => e.id));
+  }
+
+  /** 点行：普通点击 = 选中；Ctrl 点击 = 勾选；Shift 点击 = 范围勾选。 */
+  function onRowClick(e: MouseEvent, i: number) {
+    selected = i;
+    pinMenuFor = null;
+    const entry = entries[i];
+    if (!entry) return;
+    if (e.ctrlKey || e.metaKey) {
+      toggleChecked(entry.id);
+      lastClicked = i;
+      return;
+    }
+    if (e.shiftKey && lastClicked >= 0) {
+      const [from, to] = lastClicked < i ? [lastClicked, i] : [i, lastClicked];
+      setChecked(entries.slice(from, to + 1).map((x) => x.id), true);
+      return;
+    }
+    lastClicked = i;
+  }
+
+  async function removeChecked() {
+    const ids = [...checked];
+    if (!ids.length) return;
+    try {
+      const n = await deleteEntries(ids);
+      checked = new Set<string>();
+      showToast(`已删除 ${n} 条`);
+      await refresh();
+    } catch (e) {
+      showToast(String(e), "warn");
+    }
+  }
+
+  /* ---------------------------------------------------------- 置顶槽 */
+
+  async function openPinMenu(entry: ClipEntry) {
+    try {
+      slots = await pinnedSlots();
+    } catch {
+      slots = [];
+    }
+    pinMenuFor = pinMenuFor === entry.id ? null : entry.id;
+  }
+
+  async function assignSlot(entry: ClipEntry, slot: number | null) {
+    try {
+      await pinEntry(entry.id, slot);
+      showToast(slot == null ? "已取消置顶" : `已置顶到槽 ${slot}`);
+      pinMenuFor = null;
+      await refresh();
+    } catch (e) {
+      showToast(String(e), "warn");
+    }
+  }
+
   async function onKeydown(e: KeyboardEvent) {
     switch (e.key) {
       case "Escape":
@@ -189,12 +281,38 @@
         return;
       }
       case "Delete":
-        if (e.ctrlKey) {
-          e.preventDefault();
+        e.preventDefault();
+        // 有勾选就批量删，否则删当前高亮的一条
+        if (checked.size) await removeChecked();
+        else {
           const entry = selectedEntry();
           if (entry) await removeEntry(entry);
         }
         return;
+      case ",":
+        if (e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          await openSettings();
+          await hideOverlay();
+        }
+        return;
+      case " ":
+        // 空格 = 勾选/取消勾选当前高亮行（列表通用习惯）。
+        // 但搜索框有内容时要把空格让给它，否则没法输入空格。
+        if (query.trim() === "" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          const entry = selectedEntry();
+          if (entry) toggleChecked(entry.id);
+        }
+        return;
+      case "F2": {
+        // WebView2 会把 Ctrl+P 当成浏览器的"打印"处理掉（页面收不到 keydown），
+        // 所以置顶用 F2 这个一定送得到的键位。
+        e.preventDefault();
+        const entry = selectedEntry();
+        if (entry) await togglePin(entry);
+        return;
+      }
     }
 
     // Ctrl+Shift+1..9 → 直贴对应置顶槽（浮层内也支持）
@@ -222,14 +340,21 @@
     await refresh();
     searchInput?.focus();
 
+    // 首次运行 / 托盘「使用提示」：给一句看得见的说明
+    const hint = await takeStartupHint().catch(() => null);
+    if (hint) showToast(hint, "info");
+
     unlisteners.push(
       await listen("clipstack://changed", () => refresh()),
       await listen("clipstack://paused", () => {}),
+      // 设置面板改了主题 / 配置：立刻跟上，不用重开浮层
+      await listen(EVENT_CONFIG_CHANGED, async () => {
+        cfg = await getConfig().catch(() => cfg);
+        await applyTheme();
+      }),
       await listen("tauri://focus", () => {
-        // 每次浮层重新获得焦点都从最新一条开始。
-        // 之前 selected 会沿用上次的下标（refresh() 只做 clamp），而新复制的内容总是
-        // 插在列表最前面，于是"同一个下标"指向的条目整体下移 → 直接回车粘错条目。
         selected = 0;
+        pinMenuFor = null;
         searchInput?.focus();
         refresh().then(() => scrollIntoView());
       }),
@@ -257,6 +382,31 @@
 
 <div class="panel" role="dialog" aria-label="剪贴板历史">
   <header class="search-row">
+    <button
+      class="icon-btn"
+      title="打开设置（Ctrl+,）"
+      aria-label="打开设置"
+      onclick={async () => {
+        await openSettings();
+        await hideOverlay();
+      }}
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <path
+          d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+        />
+        <path
+          d="M19.4 13a7.5 7.5 0 0 0 0-2l2-1.5-2-3.4-2.3 1a7.6 7.6 0 0 0-1.7-1l-.3-2.5h-4l-.3 2.5a7.6 7.6 0 0 0-1.7 1l-2.3-1-2 3.4L4.6 11a7.5 7.5 0 0 0 0 2l-2 1.5 2 3.4 2.3-1a7.6 7.6 0 0 0 1.7 1l.3 2.5h4l.3-2.5a7.6 7.6 0 0 0 1.7-1l2.3 1 2-3.4-2-1.5Z"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linejoin="round"
+        />
+      </svg>
+    </button>
     <svg class="logo" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
       <rect x="4" y="3" width="16" height="18" rx="3.5" fill="none" stroke="currentColor" stroke-width="1.8" />
       <rect x="9" y="1.4" width="6" height="4" rx="1.6" fill="currentColor" />
@@ -299,14 +449,27 @@
           <div
             class="row"
             class:selected={i === selected}
+            class:checked={checked.has(entry.id)}
             role="button"
             tabindex="-1"
-            onclick={() => (selected = i)}
+            onclick={(e) => onRowClick(e, i)}
             ondblclick={() => pasteAt(i)}
           >
+            <label
+              class="check"
+              title="勾选（Ctrl+点击、Shift+点击连选）"
+              onclick={(e) => e.stopPropagation()}
+            >
+              <input
+                type="checkbox"
+                checked={checked.has(entry.id)}
+                onchange={() => toggleChecked(entry.id)}
+                aria-label="选择这条记录"
+              />
+            </label>
             <div class="thumb">
               {#if entry.kind === "image" && entry.thumbPath}
-                <img src={convertFileSrc(entry.thumbPath)} alt="图片缩略图" />
+                <img src={convertFileSrc(entry.thumbPath)} alt="图片缩略图" loading="lazy" />
               {:else}
                 <span class="text-glyph">T</span>
               {/if}
@@ -327,8 +490,41 @@
                 {/if}
               </div>
             </div>
-            {#if entry.pinned != null}
-              <span class="pin" title={`置顶槽 ${entry.pinned}`}>{entry.pinned}</span>
+
+            <button
+              class="pin-btn"
+              class:pinned={entry.pinned != null}
+              title={entry.pinned != null ? `已置顶到槽 ${entry.pinned}（点击换槽或取消）` : "置顶到槽位 1~9"}
+              aria-label="置顶"
+              onclick={(e) => {
+                e.stopPropagation();
+                openPinMenu(entry);
+              }}
+            >
+              {entry.pinned != null ? `📌${entry.pinned}` : "📌"}
+            </button>
+
+            {#if pinMenuFor === entry.id}
+              <div class="slot-menu" role="menu" onclick={(e) => e.stopPropagation()}>
+                <div class="slot-menu-title">置顶到槽位</div>
+                <div class="slot-menu-grid">
+                  {#each Array(9) as _, k}
+                    <button
+                      class="slot-cell"
+                      class:occupied={slots[k] != null}
+                      title={slots[k]
+                        ? `槽 ${k + 1} 已占用：${slots[k]!.kind === "image" ? "图片" : (slots[k]!.content ?? "").slice(0, 18)}（点击会替换）`
+                        : `槽 ${k + 1} 是空的`}
+                      onclick={() => assignSlot(entry, k + 1)}
+                    >
+                      {k + 1}
+                    </button>
+                  {/each}
+                </div>
+                {#if entry.pinned != null}
+                  <button class="slot-unpin" onclick={() => assignSlot(entry, null)}>取消置顶（槽 {entry.pinned}）</button>
+                {/if}
+              </div>
             {/if}
           </div>
         {/each}
@@ -356,13 +552,26 @@
   </div>
 
   <footer class="footer">
-    <span class="hint"><span class="kbd">↑</span><span class="kbd">↓</span> 选择</span>
-    <span class="hint"><span class="kbd">Enter</span> 粘贴</span>
-    <span class="hint"><span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">1-9</span> 直贴槽</span>
-    <span class="hint"><span class="kbd">Ctrl</span>+<span class="kbd">P</span> 置顶</span>
-    <span class="hint"><span class="kbd">Ctrl</span>+<span class="kbd">Del</span> 删除</span>
-    <span class="spacer"></span>
-    <span class="hint"><span class="kbd">Esc</span> 关闭</span>
+    {#if checked.size}
+      <span class="bulk">
+        已勾选 <b>{checked.size}</b> 条
+        <button class="bulk-btn" onclick={removeChecked}>删除勾选</button>
+        <button class="bulk-btn" onclick={toggleAll}>{allChecked() ? "取消全选" : "全选"}</button>
+        <button class="bulk-btn" onclick={() => (checked = new Set<string>())}>取消选择</button>
+      </span>
+      <span class="spacer"></span>
+      <span class="hint"><span class="kbd">Del</span> 删除勾选</span>
+    {:else}
+      <span class="hint"><span class="kbd">↑</span><span class="kbd">↓</span> 选择</span>
+      <span class="hint"><span class="kbd">Enter</span> 粘贴</span>
+      <span class="hint"><span class="kbd">Ctrl</span>+<span class="kbd">Shift</span>+<span class="kbd">1-9</span> 直贴槽</span>
+      <span class="hint"><span class="kbd">F2</span> 置顶 / 换槽</span>
+      <span class="hint"><span class="kbd">Space</span> 勾选</span>
+      <span class="hint"><span class="kbd">Del</span> 删除</span>
+      <span class="spacer"></span>
+      <span class="hint"><span class="kbd">Ctrl</span>+点击 勾选多条</span>
+      <span class="hint"><span class="kbd">Esc</span> 关闭</span>
+    {/if}
     <span class="count faint">{entries.length} 条</span>
   </footer>
 </div>
@@ -393,6 +602,21 @@
 
   .logo {
     flex: none;
+  }
+
+  .icon-btn {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    color: var(--fg-muted);
+  }
+
+  .icon-btn:hover {
+    background: var(--bg-sunken);
+    color: var(--accent);
   }
 
   .search {
@@ -444,6 +668,7 @@
   }
 
   .row {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 10px;
@@ -454,6 +679,100 @@
 
   .row.selected {
     background: var(--accent-soft);
+  }
+
+  .row.checked {
+    outline: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+
+  .check {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 18px;
+  }
+
+  .check input {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+
+  .pin-btn {
+    flex: none;
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--fg-faint);
+    filter: grayscale(1) opacity(0.7);
+  }
+
+  .pin-btn:hover {
+    background: var(--bg-sunken);
+    filter: none;
+  }
+
+  .pin-btn.pinned {
+    color: var(--accent-fg);
+    background: var(--accent);
+    filter: none;
+    font-weight: 600;
+  }
+
+  .slot-menu {
+    position: absolute;
+    right: 8px;
+    top: 100%;
+    z-index: 20;
+    width: 208px;
+    padding: 9px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elev);
+    box-shadow: var(--shadow);
+  }
+
+  .slot-menu-title {
+    font-size: 11px;
+    color: var(--fg-muted);
+    margin-bottom: 7px;
+  }
+
+  .slot-menu-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 5px;
+  }
+
+  .slot-cell {
+    height: 26px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--bg-sunken);
+    font-family: var(--mono);
+    font-size: 11.5px;
+  }
+
+  .slot-cell:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .slot-cell.occupied {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .slot-unpin {
+    margin-top: 8px;
+    width: 100%;
+    padding: 4px 0;
+    border-radius: 6px;
+    font-size: 11.5px;
+    color: var(--danger);
+    border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border-strong));
   }
 
   .thumb {
@@ -582,5 +901,25 @@
 
   .spacer {
     flex: 1;
+  }
+
+  .bulk {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--fg);
+  }
+
+  .bulk-btn {
+    padding: 3px 9px;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--bg-sunken);
+    font-size: 11px;
+  }
+
+  .bulk-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
   }
 </style>

@@ -87,6 +87,28 @@ pub fn normalize(s: &str) -> String {
     parse(s).map(|h| h.canonical()).unwrap_or_else(|_| s.to_string())
 }
 
+/// 「注册了会把系统常用操作抢走」的组合。
+///
+/// 全局热键是抢占式的：把呼出浮层设成 `Ctrl+V` 之后，系统里任何地方按 Ctrl+V 都只会
+/// 弹出 clipstack，粘贴彻底失效（想粘回自己刚复制的历史条目都不行）。这类组合要么
+/// 拒绝，要么至少明确警告。
+pub fn danger_reason(raw: &str) -> Option<String> {
+    let canonical = normalize(raw);
+    let mut parts: Vec<&str> = canonical.split('+').map(|p| p.trim()).collect();
+    let key = parts.pop()?.to_ascii_uppercase();
+    let mods: Vec<String> = parts.iter().map(|m| m.to_ascii_lowercase()).collect();
+    let only_ctrl = mods.iter().any(|m| m == "ctrl") && mods.len() == 1;
+    if only_ctrl && matches!(key.as_str(), "V" | "C" | "X" | "Z" | "A" | "S" | "P" | "F") {
+        return Some(format!(
+            "Ctrl+{key} 是系统最常用的快捷键之一，注册后它会被浮层抢走（例如 Ctrl+V 再也粘贴不了东西），请换一个组合"
+        ));
+    }
+    if canonical == "Ctrl+Shift+C" {
+        return Some("Ctrl+Shift+C 在很多程序里是「复制并格式化」，建议换一个组合".into());
+    }
+    None
+}
+
 /// 接受 `V` / `v` / `KeyV` / `1` / `Digit1` / `Space` / `space` / `F4` / `PageUp`。
 ///
 /// 注意：`keyboard-types::Code::from_str` 只认它自己的 CamelCase 全名

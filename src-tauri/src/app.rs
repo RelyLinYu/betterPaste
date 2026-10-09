@@ -14,6 +14,8 @@ pub const SETTINGS: &str = "settings";
 pub const EVENT_CHANGED: &str = "clipstack://changed";
 /// 前端收到这个事件就同步暂停状态。
 pub const EVENT_PAUSED: &str = "clipstack://paused";
+/// 配置变了（主题等），浮层收到要重新套用主题。
+pub const EVENT_CONFIG: &str = "clipstack://config";
 
 pub struct AppState {
     pub config: RwLock<AppConfig>,
@@ -100,5 +102,10 @@ impl AppState {
 
     pub fn notify_changed(&self) {
         self.emit(EVENT_CHANGED, ());
+    }
+
+    /// 配置变更后通知所有窗口（浮层要重新套用主题）。
+    pub fn notify_config(&self) {
+        self.emit(EVENT_CONFIG, ());
     }
 }
