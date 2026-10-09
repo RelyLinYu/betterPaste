@@ -127,6 +127,7 @@ impl Store {
                 width       INTEGER,
                 height      INTEGER,
                 bytes       INTEGER NOT NULL DEFAULT 0,
+                img_hash    INTEGER,
                 pinned      INTEGER,
                 source_app  TEXT,
                 created_at  INTEGER NOT NULL,
@@ -170,6 +171,23 @@ impl Store {
             Ok(_) => {}
             Err(e) => log::warn!("清理 FTS 幽灵索引失败: {e}"),
         }
+
+        // 旧库补列：图片内容哈希（用于「连续同一张图只记一条」）。
+        // 新库由上面的 CREATE TABLE 直接带上；0.2.1 及以前的老库没有这一列，
+        // 用 PRAGMA 判断后再补，避免每次启动都撞 "duplicate column name"。
+        let has_img_hash = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('entries') WHERE name = 'img_hash'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(true);
+        if !has_img_hash {
+            conn.execute("ALTER TABLE entries ADD COLUMN img_hash INTEGER", [])?;
+            log::info!("已为旧库补上 entries.img_hash 列");
+        }
+
         Ok(Self { conn })
     }
 
@@ -205,7 +223,16 @@ impl Store {
         width: u32,
         height: u32,
         source_app: Option<&str>,
-    ) -> Result<ClipEntry> {
+    ) -> Result<Option<ClipEntry>> {
+        // 一张截图常常触发**两次**剪贴板变化（工具先放 CF_DIB、随后再补别的格式），
+        // 内容完全一样就没必要记两条 —— 与文本「和最新一条相同就跳过」同语义。
+        // 判断放在写文件之前：重复时一个字节都不落盘，也不会留下孤儿 PNG。
+        let hash = Self::image_hash(&png_bytes);
+        if self.recent_image_hash()? == Some(hash) {
+            log::debug!("图片与最新一条相同，跳过（{} 字节）", png_bytes.len());
+            return Ok(None);
+        }
+
         let id = Uuid::new_v4().to_string();
         let images = paths::images_dir()?;
         let thumbs = paths::thumbs_dir()?;
@@ -242,14 +269,15 @@ impl Store {
         let now = now_ms();
         let bytes = png_bytes.len() as u64;
         if let Err(e) = self.conn.execute(
-            "INSERT INTO entries (type, image_path, thumb_path, width, height, bytes, source_app, created_at, uid)
-             VALUES ('image', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO entries (type, image_path, thumb_path, width, height, bytes, img_hash, source_app, created_at, uid)
+             VALUES ('image', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 rel(&image_file),
                 thumb.as_ref().map(rel),
                 width,
                 height,
                 bytes,
+                hash,
                 source_app,
                 now,
                 id
@@ -260,12 +288,38 @@ impl Store {
         }
 
         match self.get_by_uid(&id)? {
-            Some(entry) => Ok(entry),
+            Some(entry) => Ok(Some(entry)),
             None => {
                 cleanup(&image_file, &thumb);
                 Err(Error::Other("图片写入后读回失败".into()))
             }
         }
+    }
+
+    /// 图片内容的 64 位哈希（FNV-1a）。文本直接用内容比较，图片用哈希比较。
+    pub fn image_hash(png: &[u8]) -> i64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in png {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x100_0000_01b3);
+        }
+        h as i64
+    }
+
+    /// 最新一条**图片**记录的内容哈希（库里没有图片则为 `None`）。
+    ///
+    /// 与 `recent_content` 对称：只和"上一条同类记录"比，所以"同一张图连着出现两次"
+    /// 会被挡掉，而"先复制别的、再复制这张图"仍然照常入库。
+    pub fn recent_image_hash(&self) -> Result<Option<i64>> {
+        let v = self
+            .conn
+            .query_row(
+                "SELECT img_hash FROM entries WHERE type = 'image' ORDER BY created_at DESC, id DESC LIMIT 1",
+                [],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .optional()?;
+        Ok(v.flatten())
     }
 
     /// 把某条记录钉到槽位（`None` = 取消置顶）。
@@ -625,6 +679,44 @@ mod tests {
 
     fn mem() -> Store {
         Store::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn image_hash_is_stable_and_order_sensitive() {
+        assert_eq!(Store::image_hash(&[1, 2, 3]), Store::image_hash(&[1, 2, 3]));
+        assert_ne!(Store::image_hash(&[1, 2, 3]), Store::image_hash(&[3, 2, 1]));
+    }
+
+    #[test]
+    fn recent_image_hash_tracks_the_newest_image_row() {
+        let s = mem();
+        assert_eq!(s.recent_image_hash().unwrap(), None);
+        s.conn
+            .execute(
+                "INSERT INTO entries (type, image_path, img_hash, bytes, created_at, uid)
+                 VALUES ('image','images/a.png',11,1,100,'u1')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(s.recent_image_hash().unwrap(), Some(11));
+        s.conn
+            .execute(
+                "INSERT INTO entries (type, image_path, img_hash, bytes, created_at, uid)
+                 VALUES ('image','images/b.png',22,1,200,'u2')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(s.recent_image_hash().unwrap(), Some(22));
+        // 中间夹一条更新的文本：判定必须仍然对着"最新的图片"，
+        // 否则截图工具连放两次时会被中途写进来的文本打断，去重就漏了。
+        s.conn
+            .execute(
+                "INSERT INTO entries (type, content, bytes, created_at, uid)
+                 VALUES ('text','hello',5,300,'u3')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(s.recent_image_hash().unwrap(), Some(22));
     }
 
     #[cfg(test)]

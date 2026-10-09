@@ -95,16 +95,6 @@ fn mark_suppressed(fp: Fingerprint) {
     *SUPPRESS.lock() = Some((fp, Instant::now()));
 }
 
-fn hash64(bytes: &[u8]) -> u64 {
-    // FNV-1a，够用且不需要额外依赖
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in bytes {
-        h ^= u64::from(*b);
-        h = h.wrapping_mul(0x100_0000_01b3);
-    }
-    h
-}
-
 /// 这次读到的文本是不是我们自己刚写进去的那一条（是则消费掉指纹）。
 fn suppressed_text(text: &str) -> bool {
     let mut guard = SUPPRESS.lock();
@@ -122,7 +112,8 @@ fn suppressed_text(text: &str) -> bool {
 }
 
 fn suppressed_image(png: &[u8]) -> bool {
-    let h = hash64(png);
+    // 和 store 的去重共用同一个哈希实现，别让两处逻辑漂移
+    let h = store::Store::image_hash(png) as u64;
     let mut guard = SUPPRESS.lock();
     match guard.as_ref() {
         Some((_, at)) if at.elapsed() >= SUPPRESS_WINDOW => {
@@ -178,7 +169,7 @@ pub fn write_image(png_bytes: &[u8]) -> Result<()> {
         })
     })
     .ok_or_else(|| Error::Clipboard("写入图片失败（可能被其他程序占用）".into()))?;
-    mark_suppressed(Fingerprint::Image(hash64(png_bytes)));
+    mark_suppressed(Fingerprint::Image(store::Store::image_hash(png_bytes) as u64));
     Ok(())
 }
 
@@ -437,7 +428,11 @@ fn store_image(
     }
     {
         let mut store = state.store.lock();
-        store.insert_image(png, w, h, source_app)?;
+        // 连续同一张图（截图工具一次复制常见两次剪贴板变化）只留一条
+        if store.insert_image(png, w, h, source_app)?.is_none() {
+            log::debug!("同一张图紧接着又出现，跳过");
+            return Ok(());
+        }
     }
     state.after_write();
     Ok(())
