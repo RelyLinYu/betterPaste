@@ -31,3 +31,21 @@ desktop.ini
 # --- Mobile scaffolding produced by `tauri icon` (not shipped) ---
 src-tauri/icons/android/
 src-tauri/icons/ios/
+
+# ---- GitHub 首次上传起步必备（脱敏审计要求，见 docs） ----
+关键信息速查.md
+.env
+.env.*
+!.env.example
+private/
+data/
+server/data/
+*.jsonl
+*.bak
+*.bak-*
+*.pem
+*.key
+id_rsa*
+known_hosts
+budget.json
+*.local
