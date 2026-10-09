@@ -64,19 +64,56 @@ impl Default for AppConfig {
 
 impl AppConfig {
     pub fn load() -> Self {
-        match paths::config_path() {
-            Ok(p) if p.exists() => match std::fs::read_to_string(&p) {
-                Ok(raw) => serde_json::from_str(&raw).unwrap_or_default(),
-                Err(_) => Self::default(),
-            },
-            _ => Self::default(),
+        let Ok(p) = paths::config_path() else {
+            return Self::default();
+        };
+        if !p.exists() {
+            return Self::default();
+        }
+        let raw = match std::fs::read_to_string(&p) {
+            Ok(r) => r,
+            Err(e) => {
+                log::warn!("配置读取失败，使用默认值: {e}");
+                return Self::default();
+            }
+        };
+        match serde_json::from_str(&raw) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                // 旧实现是 `unwrap_or_default()`：一个字段类型不对（例如手改出
+                // `"maxEntries": "2"`）就**静默**把热键、主题、忽略列表全部重置。
+                // 现在：坏文件留证 + 逐字段抢救，只丢掉真正解析不出来的那几个字段。
+                let bad = p.with_extension("json.bad");
+                if let Err(copy_err) = std::fs::copy(&p, &bad) {
+                    log::warn!("备份坏配置到 {} 失败: {copy_err}", bad.display());
+                }
+                match salvage(&raw) {
+                    Some((cfg, dropped)) => {
+                        log::warn!(
+                            "配置解析失败（{e}）；已按默认值处理 {dropped:?} 这几个字段，其余设置保留。坏文件备份：{}",
+                            bad.display()
+                        );
+                        // 把抢救回来的配置写回去，避免每次启动都重复报错
+                        let _ = cfg.save();
+                        cfg
+                    }
+                    None => {
+                        log::warn!("配置解析彻底失败，使用默认值。坏文件备份：{}", bad.display());
+                        Self::default()
+                    }
+                }
+            }
         }
     }
 
+    /// 原子写：先写临时文件再 rename（直接 write 是 CREATE+TRUNCATE，
+    /// 中途断电/被杀就留下半个 JSON，下次启动走上面的静默重置路径）。
     pub fn save(&self) -> Result<()> {
         let p = paths::config_path()?;
         let raw = serde_json::to_string_pretty(self)?;
-        std::fs::write(p, raw)?;
+        let tmp = p.with_extension("json.tmp");
+        std::fs::write(&tmp, raw)?;
+        std::fs::rename(&tmp, &p)?;
         Ok(())
     }
 
@@ -94,8 +131,25 @@ impl AppConfig {
     }
 }
 
-/// `clipstack --probe [query] [--bench N]`：不开 UI，直接打印最近的历史。
-/// 带 `--bench` 时把查询重复 N 次并打印耗时——用来核对「500 条下搜索 ≤100ms」。
+/// 尽力从坏配置里捞回能用的字段：逐个字段试解析，只丢掉类型不对的那几个。
+///
+/// 返回 `(配置, 被丢掉的字段名)`；连 JSON 对象都构不成时返回 `None`。
+fn salvage(raw: &str) -> Option<(AppConfig, Vec<String>)> {
+    let mut obj = serde_json::from_str::<serde_json::Value>(raw).ok()?.as_object()?.clone();
+    let mut dropped = Vec::new();
+    for key in obj.keys().cloned().collect::<Vec<_>>() {
+        let single: serde_json::Map<String, serde_json::Value> =
+            std::iter::once((key.clone(), obj[&key].clone())).collect();
+        if serde_json::from_value::<AppConfig>(serde_json::Value::Object(single)).is_err() {
+            obj.remove(&key);
+            dropped.push(key);
+        }
+    }
+    let cfg = serde_json::from_value::<AppConfig>(serde_json::Value::Object(obj)).ok()?;
+    Some((cfg, dropped))
+}
+
+/// `clipstack --probe [query] [--bench N]`：不开 UI，直接打印最近的历史。/// 带 `--bench` 时把查询重复 N 次并打印耗时——用来核对「500 条下搜索 ≤100ms」。
 pub fn probe(query: Option<String>, bench: usize) {
     match crate::store::Store::open() {
         Ok(store) => {
@@ -200,6 +254,10 @@ pub fn ctl_pin(slot: u8, needle: &str) -> bool {
 }
 
 pub fn ctl_unpin(slot: u8) -> bool {
+    if !(1..=9).contains(&slot) {
+        println!("槽位必须是 1~9");
+        return false;
+    }
     match crate::store::Store::open() {
         Ok(mut store) => match store.get_pinned(slot) {
             Ok(Some(e)) => match store.set_pinned(&e.id, None) {

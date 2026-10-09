@@ -1,3 +1,16 @@
 [workspace]
 members = ["src-tauri"]
 resolver = "2"
+
+# NOTE: with a workspace present, cargo **only** reads profiles from the root
+# manifest — the [profile.release] block used to live in src-tauri/Cargo.toml and
+# was silently ignored ("profiles for the non root package will be ignored"),
+# so the shipped binary had no LTO/strip and panic=unwind instead of abort.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+# A resident tray app must not vanish because one worker thread panicked;
+# the clipboard watcher also wraps its work in catch_unwind and keeps running.
+panic = "unwind"
+strip = true

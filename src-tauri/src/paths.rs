@@ -1,14 +1,23 @@
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use crate::{Error, Result};
 
+/// Resolved once per process. `map_row` used to call this for **every** row,
+/// which meant one SHGetKnownFolderPath + one stat per row (N+1 syscalls on
+/// every list/search).
+static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
 /// Root data directory: `%APPDATA%\clipstack\`.
 pub fn data_dir() -> Result<PathBuf> {
+    if let Some(dir) = DATA_DIR.get() {
+        return Ok(dir.clone());
+    }
     let dir = dirs::data_dir()
         .ok_or_else(|| Error::Other("%APPDATA% 不可用".into()))?
         .join("clipstack");
     ensure_dir(&dir)?;
-    Ok(dir)
+    Ok(DATA_DIR.get_or_init(|| dir).clone())
 }
 
 pub fn images_dir() -> Result<PathBuf> {

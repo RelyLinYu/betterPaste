@@ -29,20 +29,33 @@ pub fn rebind_hotkeys(app: &tauri::AppHandle, state: &Arc<AppState>) -> Result<(
 
     let app_for_overlay = app.clone();
     let state_for_overlay = state.clone();
-    hotkey::register_overlay_hotkey(app, &cfg.hotkey, move || {
+    let overlay_res = hotkey::register_overlay_hotkey(app, &cfg.hotkey, move || {
         commands::show_overlay(&app_for_overlay, &state_for_overlay);
-    })?;
+    });
 
+    let app_for_slot = app.clone();
     let state_for_slot = state.clone();
-    // 单个槽位注册失败不应该拖垮整个换绑流程，逐个记录即可
-    if let Err(e) = hotkey::register_slot_hotkeys(app, &cfg.slot_hotkeys, move |slot| {
-        // 直贴：把焦点还给调用前的窗口，再模拟 Ctrl+V
+    // 槽位热键单独注册：浮层热键被别的程序占用时，1~9 直贴不该跟着一起废掉
+    let slot_res = hotkey::register_slot_hotkeys(app, &cfg.slot_hotkeys, move |slot| {
         let entry = state_for_slot.store.lock().get_pinned(slot).ok().flatten();
         let Some(entry) = entry else {
             log::debug!("槽位 {slot} 是空的");
             return;
         };
-        let target = win::foreground_window();
+        // 目标窗口 = 触发时最前面的那个窗口；但浮层开着时它自己是前台窗口，
+        // 这时必须用 show_overlay 在弹出**之前**记下的那个目标，否则 Ctrl+V
+        // 会打进浮层自己的搜索框（用户什么都没粘到）。
+        let fg = win::foreground_window();
+        let target = if fg != 0 && win::window_process_id(fg) == std::process::id() {
+            let stored = state_for_slot.target_hwnd.load(Ordering::Relaxed) as isize;
+            if stored != 0 && win::window_process_id(stored) != std::process::id() {
+                stored
+            } else {
+                fg
+            }
+        } else {
+            fg
+        };
         state_for_slot.target_hwnd.store(target as i64, Ordering::Relaxed);
         if let Err(e) = clipboard::write_entry(&entry) {
             log::warn!("槽位直贴失败: {e}");
@@ -56,11 +69,16 @@ pub fn rebind_hotkeys(app: &tauri::AppHandle, state: &Arc<AppState>) -> Result<(
         if matches!(outcome, paste::PasteOutcome::ManualFallback) {
             log::warn!("槽位 {slot}：目标窗口无法激活，请手动 Ctrl+V");
         }
-    }) {
-        log::warn!("{e}");
-    }
+        if state_for_slot.config().close_after_paste {
+            commands::hide_overlay_window(&app_for_slot);
+        }
+    });
 
-    Ok(())
+    match (overlay_res, slot_res) {
+        (Err(e), _) => Err(e),
+        (Ok(()), Err(e)) => Err(e),
+        _ => Ok(()),
+    }
 }
 
 /// 启动时希望立刻显示的窗口。
@@ -83,10 +101,18 @@ pub fn run_with(start: StartWindow) {
 
     tauri::Builder::default()
         // single-instance 必须第一个注册
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             use tauri::Manager as _;
             let state = app.state::<Arc<AppState>>().inner().clone();
-            tray::focus_overlay(app, &state);
+            // 第二实例的命令行必须被尊重：之前 argv 被整个丢掉，
+            // `clipstack.exe --settings` 只会切出浮层。
+            if argv.iter().any(|a| a == "--settings") {
+                commands::show_window(app, SETTINGS);
+            } else if argv.iter().any(|a| a == "--overlay") {
+                commands::show_overlay(app, &state);
+            } else {
+                tray::focus_overlay(app, &state);
+            }
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())

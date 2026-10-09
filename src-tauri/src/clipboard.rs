@@ -8,9 +8,10 @@
 use std::cell::RefCell;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use arboard::Clipboard;
+use parking_lot::Mutex;
 
 use crate::app::AppState;
 use crate::store::{self, ClipEntry, ClipKind};
@@ -72,6 +73,70 @@ fn with_clipboard<T>(f: impl Fn(&mut Clipboard) -> std::result::Result<T, arboar
     None
 }
 
+// ------------------------------------------------------------------ 自写入抑制
+
+/// 我们自己刚写进剪贴板的内容指纹。
+///
+/// 只靠序号（`suppress_seq`）挡不住：写剪贴板与记账之间有 25 ms 空窗，watcher 每
+/// 60 ms 轮询一次，落在窗口里的那一次会先把新序号登记成"待捕获"，而 `decide()` 的
+/// pending 分支根本不看 `suppress_seq` → 于是"从历史里粘贴一条旧内容"会把它自己
+/// 再记一遍（实测：库里出现两行完全相同的内容）。按内容指纹比对就没有这个竞态。
+enum Fingerprint {
+    Text(String),
+    Image(u64),
+}
+
+static SUPPRESS: Mutex<Option<(Fingerprint, Instant)>> = Mutex::new(None);
+
+/// 指纹的有效期：超过它就当用户自己的复制。
+const SUPPRESS_WINDOW: Duration = Duration::from_secs(8);
+
+fn mark_suppressed(fp: Fingerprint) {
+    *SUPPRESS.lock() = Some((fp, Instant::now()));
+}
+
+fn hash64(bytes: &[u8]) -> u64 {
+    // FNV-1a，够用且不需要额外依赖
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
+/// 这次读到的文本是不是我们自己刚写进去的那一条（是则消费掉指纹）。
+fn suppressed_text(text: &str) -> bool {
+    let mut guard = SUPPRESS.lock();
+    match guard.as_ref() {
+        Some((_, at)) if at.elapsed() >= SUPPRESS_WINDOW => {
+            *guard = None;
+            false
+        }
+        Some((Fingerprint::Text(t), _)) if t == text => {
+            *guard = None;
+            true
+        }
+        _ => false,
+    }
+}
+
+fn suppressed_image(png: &[u8]) -> bool {
+    let h = hash64(png);
+    let mut guard = SUPPRESS.lock();
+    match guard.as_ref() {
+        Some((_, at)) if at.elapsed() >= SUPPRESS_WINDOW => {
+            *guard = None;
+            false
+        }
+        Some((Fingerprint::Image(x), _)) if *x == h => {
+            *guard = None;
+            true
+        }
+        _ => false,
+    }
+}
+
 // ------------------------------------------------------------------ reading
 
 /// 读取剪贴板文本（无文本则 `None`）。
@@ -92,13 +157,18 @@ pub fn read_image_png() -> Option<(Vec<u8>, u32, u32)> {
 
 pub fn write_text(text: &str) -> Result<()> {
     with_clipboard(|cb| cb.set_text(text.to_string()))
-        .ok_or_else(|| Error::Clipboard("写入剪贴板失败（可能被其他程序占用）".into()))
+        .ok_or_else(|| Error::Clipboard("写入剪贴板失败（可能被其他程序占用）".into()))?;
+    // 记账放在写入之后、且在返回之前：watcher 若在这之后才轮询到，就靠指纹挡住
+    mark_suppressed(Fingerprint::Text(text.to_string()));
+    Ok(())
 }
 
 /// 把图片同时以 PNG 与 DIB 放进剪贴板——不同程序偏好不同格式。
 pub fn write_image(png_bytes: &[u8]) -> Result<()> {
     let img = image::load_from_memory(png_bytes)?;
-    let rgba = img.to_rgba8();
+    // into_rgba8 直接消耗解码结果（to_rgba8 会再复制一份）；下面的 clone 是因为
+    // with_clipboard 的回调是 Fn（可能重试两次），拿不出所有权。
+    let rgba = img.into_rgba8();
     let (w, h) = (rgba.width() as usize, rgba.height() as usize);
     with_clipboard(|cb| {
         cb.set_image(arboard::ImageData {
@@ -107,7 +177,9 @@ pub fn write_image(png_bytes: &[u8]) -> Result<()> {
             bytes: std::borrow::Cow::Owned(rgba.clone().into_raw()),
         })
     })
-    .ok_or_else(|| Error::Clipboard("写入图片失败（可能被其他程序占用）".into()))
+    .ok_or_else(|| Error::Clipboard("写入图片失败（可能被其他程序占用）".into()))?;
+    mark_suppressed(Fingerprint::Image(hash64(png_bytes)));
+    Ok(())
 }
 
 /// 把一条历史写回剪贴板，供粘贴使用。
@@ -137,6 +209,13 @@ pub fn spawn_watcher(state: Arc<AppState>) {
 
 /// 读失败后等待重试的时间窗（覆盖别的程序"打开-清空-写入-关闭"的间隙）。
 const CAPTURE_RETRY_WINDOW: Duration = Duration::from_millis(1200);
+
+/// 一条内容最多重试这么多次就放弃（推进序号）。
+///
+/// 之前 `Ok(false)`（剪贴板忙 / 图片解不开）分支**没有任何超时**，`expired` 还被
+/// `let _ = expired;` 丢掉：剪贴板里只要有一个解不开的位图，就会每 60 ms 重开一次
+/// 剪贴板无限重试，`last_seq` 永不推进。
+const CAPTURE_MAX_ATTEMPTS: u32 = 6;
 
 /// 一次轮询该怎么处理。抽成纯函数，因为"读失败却推进了序号"正是最初丢数据的 bug。
 #[derive(Debug, PartialEq, Eq)]
@@ -196,6 +275,7 @@ fn watch_loop(state: Arc<AppState>) {
     let mut was_paused = !state.is_capturing();
     // 待确认的序号 + 重试截止时间：读失败时不能推进 last_seq，否则内容会被永久丢掉
     let mut pending: Option<(u32, std::time::Instant)> = None;
+    let mut attempts: u32 = 0;
 
     while !state.shutdown.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
@@ -227,25 +307,46 @@ fn watch_loop(state: Arc<AppState>) {
                 last_seq = seq;
                 state.suppress_seq.store(0, Ordering::Relaxed);
             }
-            Decision::CaptureNew(s) => {
+            Decision::CaptureNew(s) | Decision::Retarget(s) => {
                 pending = Some((s, std::time::Instant::now() + CAPTURE_RETRY_WINDOW));
-            }
-            Decision::Retarget(s) => {
-                pending = Some((s, std::time::Instant::now() + CAPTURE_RETRY_WINDOW));
+                attempts = 0;
             }
             Decision::RetryPending(s) => {
-                match capture_once(&state) {
+                attempts += 1;
+                // 采集里出现的任何 panic（例如新的边界 bug）都不该让"记录"永久停摆：
+                // 兜住它、记日志、跳过这一轮，下一轮照常工作。
+                let captured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| capture_once(&state)));
+                let outcome = match captured {
+                    Ok(r) => r,
+                    Err(_) => {
+                        log::error!("捕获剪贴板时 panic，已跳过这一轮（记录继续）");
+                        pending = None;
+                        last_seq = s;
+                        continue;
+                    }
+                };
+                match outcome {
                     Ok(true) => {
                         last_seq = s;
                         pending = None;
+                        attempts = 0;
                     }
-                    Ok(false) => { /* 剪贴板还忙：保持 pending，下一轮再试 */ }
+                    Ok(false) => {
+                        // 剪贴板还忙：保持 pending，但重试有上限
+                        if expired || attempts >= CAPTURE_MAX_ATTEMPTS {
+                            log::warn!("剪贴板内容连续 {attempts} 次没读出来，放弃这一条（序号 {s}）");
+                            last_seq = s;
+                            pending = None;
+                            attempts = 0;
+                        }
+                    }
                     Err(e) => {
                         log::warn!("捕获剪贴板失败: {e}");
                         // 真错误（数据库等）不该无限重试：超时就放弃
-                        if expired {
+                        if expired || attempts >= CAPTURE_MAX_ATTEMPTS {
                             last_seq = s;
                             pending = None;
+                            attempts = 0;
                         }
                     }
                 }
@@ -304,10 +405,17 @@ fn capture_once(state: &Arc<AppState>) -> Result<bool> {
 }
 
 fn store_text(state: &Arc<AppState>, text: &str, source_app: Option<&str>) -> Result<()> {
-    // 内容和最新一条完全相同就不重复入库
+    // 我们自己刚写进剪贴板的内容（粘贴历史条目 / copy_entry）不算新复制
+    if suppressed_text(text) {
+        log::debug!("跳过自己写入的文本（{} 字节）", text.len());
+        return Ok(());
+    }
+    let clipped = store::clipped(text);
     {
         let mut store = state.store.lock();
-        if store.recent_content()?.as_deref() == Some(text) {
+        // 内容和最新一条完全相同就不重复入库。
+        // 比较必须用**截断后**的文本：库里存的是截断版，拿原文比会让超长文本永远"不同"。
+        if store.recent_content()?.as_deref() == Some(clipped.as_str()) {
             return Ok(());
         }
         store.insert_text(text, source_app)?;
@@ -323,6 +431,10 @@ fn store_image(
     h: u32,
     source_app: Option<&str>,
 ) -> Result<()> {
+    if suppressed_image(&png) {
+        log::debug!("跳过自己写入的图片");
+        return Ok(());
+    }
     {
         let mut store = state.store.lock();
         store.insert_image(png, w, h, source_app)?;
@@ -348,12 +460,24 @@ impl Drop for SuppressGuard {
 
 /// 判断剪贴板里的文本是不是 HTML / XML 源码。
 ///
-/// Windows 上「复制富文本」通常会在同一个剪贴板里同时放 `HTML Format` 和
-/// `CF_UNICODETEXT`，后者就是标记语言源码。本期只做纯文本，所以把这种明显是
-/// 网页源码的内容丢掉，其余文本照常记录。
+/// Windows 上「复制富文本」会同时放 `HTML Format` 与 `CF_UNICODETEXT`，后者就是标记语言
+/// 源码；本期只做纯文本，所以把这种内容丢掉。
+///
+/// 两个曾经的坑都在这里：
+///   * `head[..head.len().min(4096)]` 是**按字节**切 UTF-8 字符串，复制一段长中文
+///     （第 4096 字节落在字符中间，4096 % 3 = 1）直接 panic，把采集线程打死；
+///   * 判定用的是 `contains`，正文里只要出现 `<body>` / `<html` 就整条丢弃，
+///     普通代码和笔记被误杀。
 pub fn looks_like_markup(text: &str) -> bool {
     let head = text.trim_start();
-    let lower = head[..head.len().min(4096)].to_ascii_lowercase();
+    // 取开头 4 KiB，且永远切在 char 边界上
+    let end = head
+        .char_indices()
+        .map(|(i, c)| i + c.len_utf8())
+        .take_while(|&e| e <= 4096)
+        .last()
+        .unwrap_or(0);
+    let lower = head[..end].trim_start().to_ascii_lowercase();
     const SIGNATURES: [&str; 6] = [
         "<!doctype html",
         "<html",
@@ -362,7 +486,8 @@ pub fn looks_like_markup(text: &str) -> bool {
         "<body",
         "<meta ",
     ];
-    SIGNATURES.iter().any(|s| lower.contains(s))
+    // 只有"文档开头就是标记语言"才算源码；正文里提到这些标签的正常文本必须留下
+    SIGNATURES.iter().any(|s| lower.starts_with(s))
 }
 
 #[cfg(test)]
@@ -423,7 +548,26 @@ mod tests {
         assert!(looks_like_markup("<!DOCTYPE html><html><body>hi</body></html>"));
         assert!(looks_like_markup("  <html lang=\"en\">"));
         assert!(looks_like_markup("<?xml version=\"1.0\"?>"));
-        assert!(looks_like_markup("<div><meta charset=\"utf-8\"></div>"));
+        assert!(looks_like_markup("<meta charset=\"utf-8\">"));
+    }
+
+    /// 回归：复制 >4096 字节的中文曾让采集线程 panic
+    /// （`head[..min(len,4096)]` 按字节切成两半），进程还在但永久不再记录。
+    #[test]
+    fn long_multibyte_text_never_panics() {
+        assert!(!looks_like_markup(&"中".repeat(4000)));
+        assert!(!looks_like_markup(&format!("ab{}", "中".repeat(3000))));
+        assert!(!looks_like_markup(&format!("{}x", "😀".repeat(2000))));
+        // 开头就是 HTML 的长文本仍然要被识别
+        assert!(looks_like_markup(&format!("<html>{}", "中".repeat(4000))));
+    }
+
+    /// 回归：正文里提到 `<body>` / `<html>` 的正常文本不能被当成网页源码丢掉。
+    #[test]
+    fn markup_in_the_middle_of_prose_is_kept() {
+        assert!(!looks_like_markup("function render() { return '<body>' + x; }"));
+        assert!(!looks_like_markup("# notes about <html> tags"));
+        assert!(!looks_like_markup("今天天气不错"));
     }
 
     #[test]

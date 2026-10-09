@@ -54,9 +54,5 @@ features = [
 # Tauri v2 default: custom-protocol is enabled by `tauri build`.
 custom-protocol = ["tauri/custom-protocol"]
 
-[profile.release]
-codegen-units = 1
-lto = true
-opt-level = "s"
-panic = "abort"
-strip = true
+# NOTE: release profiles live in the workspace root manifest (../Cargo.toml).
+# Anything written here would be ignored by cargo.

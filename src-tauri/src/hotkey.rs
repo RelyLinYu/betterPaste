@@ -187,30 +187,45 @@ where
 }
 
 /// 注册置顶槽直贴热键 `Ctrl+Shift+1..9`。
+///
+/// 单个槽位失败（录成了重复组合、被别的程序占用）**不能**影响其它槽位：旧实现里
+/// 循环体用了 `?`，一个冲突就让后面所有槽位都不再注册，而界面上只显示"已保存"。
 pub fn register_slot_hotkeys<F>(app: &AppHandle, hotkeys: &[String], handler: F) -> Result<()>
 where
     F: Fn(u8) + Send + Sync + 'static,
 {
     let gs = app.global_shortcut();
     let handler = std::sync::Arc::new(handler);
+    let mut failed: Vec<String> = Vec::new();
     for (i, raw) in hotkeys.iter().enumerate() {
         let slot = (i + 1) as u8;
+        if slot > 9 {
+            // 只支持 1~9；多余的表项会注册出"抢了键但永远取不到内容"的死热键
+            failed.push(format!("槽位 {slot}（{raw}）超出 1~9，已忽略"));
+            continue;
+        }
         let hk = match parse(raw) {
             Ok(h) => h,
             Err(e) => {
-                log::warn!("跳过无效槽位热键 {raw}: {e}");
+                failed.push(format!("槽位 {slot}（{raw}）无效：{e}"));
                 continue;
             }
         };
         let handler = handler.clone();
-        gs.on_shortcut(plugin_shortcut(&hk), move |_app, _shortcut, event| {
+        let res = gs.on_shortcut(plugin_shortcut(&hk), move |_app, _shortcut, event| {
             if event.state == ShortcutState::Pressed {
                 handler(slot);
             }
-        })
-        .map_err(|e| Error::Hotkey(format!("槽位 {slot} 热键 {raw} 注册失败：{e}")))?;
+        });
+        if let Err(e) = res {
+            failed.push(format!("槽位 {slot}（{raw}）注册失败：{e}"));
+        }
     }
-    Ok(())
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::Hotkey(failed.join("；")))
+    }
 }
 
 /// 清空所有已注册热键（换绑时先调它）。

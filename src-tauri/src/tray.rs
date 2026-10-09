@@ -52,6 +52,12 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
                 }
                 ID_QUIT => {
                     state.shutdown.store(true, Ordering::Relaxed);
+                    // 给 watcher 一轮时间收尾，然后把 WAL 落回主库——之前直接 exit(0)，
+                    // 主库长期停在 4 KiB、-wal 一直膨胀。
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+                    if let Err(e) = state.store.lock().checkpoint() {
+                        log::warn!("退出前 checkpoint 失败: {e}");
+                    }
                     app.global_shortcut().unregister_all().ok();
                     app.exit(0);
                 }

@@ -226,8 +226,12 @@
       await listen("clipstack://changed", () => refresh()),
       await listen("clipstack://paused", () => {}),
       await listen("tauri://focus", () => {
+        // 每次浮层重新获得焦点都从最新一条开始。
+        // 之前 selected 会沿用上次的下标（refresh() 只做 clamp），而新复制的内容总是
+        // 插在列表最前面，于是"同一个下标"指向的条目整体下移 → 直接回车粘错条目。
+        selected = 0;
         searchInput?.focus();
-        scrollIntoView();
+        refresh().then(() => scrollIntoView());
       }),
     );
 

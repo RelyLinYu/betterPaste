@@ -12,8 +12,8 @@ use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-    VIRTUAL_KEY, VK_CONTROL, VK_V,
+    GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+    KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT, VK_V,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow};
 
@@ -108,7 +108,7 @@ fn key(vk: VIRTUAL_KEY, up: bool) -> INPUT {
     }
 }
 
-/// 模拟一次 `Ctrl+V`。返回实际注入的事件数。
+/// 模拟一次 `Ctrl+V`。返回实际注入的事件数（正常为 4）。
 pub fn send_ctrl_v() -> u32 {
     let inputs = [
         key(VK_CONTROL, false),
@@ -117,4 +117,51 @@ pub fn send_ctrl_v() -> u32 {
         key(VK_CONTROL, true),
     ];
     unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) }
+}
+
+/// 补发一次"所有键抬起"，用于注入只成功一半时避免 Ctrl 卡住。
+pub fn release_modifiers() -> u32 {
+    let inputs = [
+        key(VK_CONTROL, true),
+        key(VK_SHIFT, true),
+        key(VK_MENU, true),
+        key(VK_V, true),
+    ];
+    unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) }
+}
+
+/// 该虚拟键此刻是否被物理按下。
+pub fn key_down(vk: VIRTUAL_KEY) -> bool {
+    unsafe { (GetAsyncKeyState(vk.0 as i32) as u16 & 0x8000) != 0 }
+}
+
+/// 修饰键是否还按着。槽位直贴是在热键 Pressed 的瞬间执行的，此时用户**物理上**
+/// 还按着 Ctrl+Shift，直接注入 `Ctrl+V` 会让目标程序收到的是 `Ctrl+Shift+V`
+/// （Chrome 变成"无格式粘贴"、Word 弹选择性粘贴、记事本干脆没反应）。
+pub fn modifiers_held() -> bool {
+    key_down(VK_CONTROL) || key_down(VK_SHIFT) || key_down(VK_MENU)
+}
+
+/// 等修饰键松开，最多等 `timeout`。返回是否已经松开。
+pub fn wait_modifiers_released(timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if !modifiers_held() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+    !modifiers_held()
+}
+
+/// 某个窗口属于哪个进程（用于识别"前台窗口是不是我们自己的浮层"）。
+pub fn window_process_id(hwnd: isize) -> u32 {
+    if hwnd == 0 {
+        return 0;
+    }
+    let mut pid = 0u32;
+    unsafe {
+        GetWindowThreadProcessId(HWND(hwnd as *mut core::ffi::c_void), Some(&mut pid));
+    }
+    pid
 }

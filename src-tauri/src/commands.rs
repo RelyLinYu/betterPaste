@@ -69,22 +69,9 @@ pub fn copy_entry(state: State<'_, std::sync::Arc<AppState>>, id: String) -> Res
 /// 清空历史。`keep_pinned = true` 时保留置顶条目。返回删除条数。
 #[tauri::command]
 pub fn clear_entries(state: State<'_, std::sync::Arc<AppState>>, keep_pinned: bool) -> Result<u32> {
-    let ids: Vec<String> = {
-        let store = state.store.lock();
-        store
-            .list(5000)?
-            .into_iter()
-            .filter(|e| !(keep_pinned && e.pinned.is_some()))
-            .map(|e| e.id)
-            .collect()
-    };
-    let n = ids.len() as u32;
-    {
-        let mut store = state.store.lock();
-        for id in ids {
-            store.delete(&id)?;
-        }
-    }
+    // 旧实现是 list(5000) 后逐条 delete：第 5000 条之后清不掉，
+    // 而且每条一个独立事务（各自 fsync），全程占着 store 互斥锁。
+    let n = state.store.lock().clear(keep_pinned)?;
     state.notify_changed();
     Ok(n)
 }
@@ -164,10 +151,22 @@ pub fn set_config(
     next.slot_hotkeys = next.slot_hotkeys.iter().map(|k| hotkey::normalize(k)).collect();
 
     state.update_config(next.clone());
-    next.save()?;
 
     if old.hotkey != next.hotkey || old.slot_hotkeys != next.slot_hotkeys {
-        crate::rebind_hotkeys(&app, state.inner())?;
+        if let Err(e) = crate::rebind_hotkeys(&app, state.inner()) {
+            // 注册失败不能把用户原来能用的热键一起弄丢（配置已落盘的话重启也回不来）：
+            // 回滚内存配置并尽量把旧热键装回去，然后把错误抛给前端。
+            state.update_config(old.clone());
+            if let Err(back) = crate::rebind_hotkeys(&app, state.inner()) {
+                log::error!("回滚热键也失败: {back}");
+            }
+            return Err(e);
+        }
+    }
+    if let Err(e) = next.save() {
+        log::warn!("配置保存失败，回滚内存配置: {e}");
+        state.update_config(old);
+        return Err(e);
     }
     if old.autostart != next.autostart {
         apply_autostart(&app, next.autostart);
