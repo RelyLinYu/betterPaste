@@ -25,9 +25,8 @@ fn main() {
 fn embed_manifest_resource() -> Result<(), String> {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").map_err(|e| e.to_string())?);
     let windres = find_tool("windres")?;
-    let ar = find_tool("ar")?;
 
-    let rc = out_dir.join("clipstack-test.rc");
+    let rc = out_dir.join("clipstack-manifest.rc");
     std::fs::write(
         &rc,
         r#"1 24
@@ -46,7 +45,7 @@ fn embed_manifest_resource() -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
 
-    let obj = out_dir.join("clipstack-test-manifest.o");
+    let obj = out_dir.join("clipstack-manifest.o");
     let status = Command::new(&windres)
         .arg("-I")
         .arg(&out_dir)

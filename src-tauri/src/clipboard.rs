@@ -149,15 +149,14 @@ enum Decision {
     RetryPending(u32),
     /// 期间又来了一次更新的复制 → 改追新的
     Retarget(u32),
-    /// 放弃这个序号（重试超时 / 剪贴板已空）并记账，避免空转
-    GiveUp(u32),
     /// 我们自己写进去的，记账但不入库
     Suppress,
 }
 
 /// `pending` 为 `None` 时传 0；`last_seq` 为已确认捕获的序号。
-/// `expired` 只作记录：即使过了软超时也再给一次捕获机会，「放弃」由调用方在
-/// capture 真正失败后决定——这样才不会因为一次瞬时占用而丢掉用户的内容。
+///
+/// 这里刻意**没有**"超时放弃"分支：即使过了软超时也要再给一次捕获机会，"放弃"
+/// 由调用方在 capture 真正失败之后决定。否则一次瞬时占用就会丢掉用户的内容。
 fn decide(
     last_seq: u32,
     pending: Option<u32>,
@@ -234,10 +233,6 @@ fn watch_loop(state: Arc<AppState>) {
             Decision::Retarget(s) => {
                 pending = Some((s, std::time::Instant::now() + CAPTURE_RETRY_WINDOW));
             }
-            Decision::GiveUp(s) => {
-                last_seq = s;
-                pending = None;
-            }
             Decision::RetryPending(s) => {
                 match capture_once(&state) {
                     Ok(true) => {
@@ -263,26 +258,16 @@ fn watch_loop(state: Arc<AppState>) {
 /// `Ok(true)` = 读到了内容（已入库或已判定为无需入库）；
 /// `Ok(false)` = 这一次没读到（剪贴板忙 / 为空），值得重试。
 fn capture_once(state: &Arc<AppState>) -> Result<bool> {
-    let t0 = std::time::Instant::now();
-    let mut lap = t0;
-
     // 文件 / 文件夹：本期不支持，直接忽略
     if win::has_file_list() {
         return Ok(true);
     }
-    let t_fmt = lap.elapsed();
-    lap = std::time::Instant::now();
 
     let cfg = state.config();
     let source_app = win::foreground_process_name();
-    let t_proc = lap.elapsed();
-    lap = std::time::Instant::now();
 
-    let mut stage = "text-off";
-    let result = if cfg.capture_text {
+    if cfg.capture_text {
         if let Some(text) = read_text() {
-            stage = "text-read";
-            let t_read = lap.elapsed();
             // 富文本 / HTML 会被系统同时以纯文本形式暴露出来，丢弃这种标记语言源码
             if looks_like_markup(&text) {
                 return Ok(true);
@@ -292,20 +277,10 @@ fn capture_once(state: &Arc<AppState>) -> Result<bool> {
                 log::warn!("文本超过体积上限，已忽略（{} 字节）", size);
                 return Ok(true);
             }
-            lap = std::time::Instant::now();
             store_text(state, &text, source_app.as_deref())?;
-            log::debug!(
-                "捕获耗时: fmt={:?} proc={:?} read={:?} store={:?} total={:?}",
-                t_fmt,
-                t_proc,
-                t_read,
-                lap.elapsed(),
-                t0.elapsed()
-            );
             return Ok(true);
         }
-        stage = "text-miss"
-    };
+    }
 
     if cfg.capture_images && win::has_image() {
         if let Some((png, w, h)) = read_image_png() {
@@ -313,30 +288,18 @@ fn capture_once(state: &Arc<AppState>) -> Result<bool> {
                 log::warn!("图片超过体积上限，已忽略（{} 字节）", png.len());
                 return Ok(true);
             }
-            let before = std::time::Instant::now();
             store_image(state, png, w, h, source_app.as_deref())?;
-            log::debug!(
-                "捕获耗时(图片): fmt={:?} proc={:?} read+store={:?} store={:?} total={:?}",
-                t_fmt,
-                t_proc,
-                before.duration_since(t0),
-                before.elapsed(),
-                t0.elapsed()
-            );
             return Ok(true);
         }
         // 有图片格式但没读到：剪贴板那一刻还忙，值得重试
-        log::debug!("捕获未读到图片（stage={stage}, total={:?}）", t0.elapsed());
         return Ok(false);
     }
 
     // 文本/图片都没读到，且确实有文本格式存在 → 多半是被短暂占用，值得重试
     if cfg.capture_text && win::has_text() {
-        log::debug!("捕获未读到文本（stage={stage}, total={:?}）", t0.elapsed());
         return Ok(false);
     }
 
-    let _ = result;
     Ok(true)
 }
 
