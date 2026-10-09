@@ -202,7 +202,7 @@ pub fn write_entry(entry: &ClipEntry) -> Result<()> {
 /// 后台常驻：轮询剪贴板序号，序号变化 = 有新复制。
 pub fn spawn_watcher(state: Arc<AppState>) {
     std::thread::Builder::new()
-        .name("clipstack-watcher".into())
+        .name("betterPaste-watcher".into())
         .spawn(move || watch_loop(state))
         .expect("failed to spawn clipboard watcher thread");
 }

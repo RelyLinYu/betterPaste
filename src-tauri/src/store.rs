@@ -560,7 +560,7 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ClipEntry> {
     })
 }
 
-/// 存进数据库的始终是相对 `%APPDATA%\clipstack\` 的路径。
+/// 存进数据库的始终是相对 `%APPDATA%\betterPaste\` 的路径。
 fn rel(p: &PathBuf) -> String {
     let root = paths::data_dir().unwrap_or_default();
     p.strip_prefix(&root)

@@ -90,7 +90,7 @@ pub fn normalize(s: &str) -> String {
 /// 「注册了会把系统常用操作抢走」的组合。
 ///
 /// 全局热键是抢占式的：把呼出浮层设成 `Ctrl+V` 之后，系统里任何地方按 Ctrl+V 都只会
-/// 弹出 clipstack，粘贴彻底失效（想粘回自己刚复制的历史条目都不行）。这类组合要么
+/// 弹出 betterPaste，粘贴彻底失效（想粘回自己刚复制的历史条目都不行）。这类组合要么
 /// 拒绝，要么至少明确警告。
 pub fn danger_reason(raw: &str) -> Option<String> {
     let canonical = normalize(raw);

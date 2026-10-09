@@ -112,7 +112,7 @@ export const restartApp = () => invoke<void>("restart_app");
 export const takeStartupHint = () => invoke<string | null>("take_startup_hint");
 
 /** 后端配置变更（主题等）推送。 */
-export const EVENT_CONFIG_CHANGED = "clipstack://config";
+export const EVENT_CONFIG_CHANGED = "betterpaste://config";
 
 /* ----------------------------------------------------------------- helpers */
 

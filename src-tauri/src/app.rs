@@ -11,11 +11,11 @@ pub const OVERLAY: &str = "overlay";
 pub const SETTINGS: &str = "settings";
 
 /// 前端收到这个事件就去重新拉一次列表。
-pub const EVENT_CHANGED: &str = "clipstack://changed";
+pub const EVENT_CHANGED: &str = "betterpaste://changed";
 /// 前端收到这个事件就同步暂停状态。
-pub const EVENT_PAUSED: &str = "clipstack://paused";
+pub const EVENT_PAUSED: &str = "betterpaste://paused";
 /// 配置变了（主题等），浮层收到要重新套用主题。
-pub const EVENT_CONFIG: &str = "clipstack://config";
+pub const EVENT_CONFIG: &str = "betterpaste://config";
 
 pub struct AppState {
     pub config: RwLock<AppConfig>,

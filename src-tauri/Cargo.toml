@@ -1,18 +1,22 @@
 [package]
-name = "clipstack"
-version = "0.1.0"
+name = "betterpaste"
+version = "0.2.0"
 description = "Clipboard history manager for Windows"
-authors = ["clipstack"]
+authors = ["betterPaste"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.77"
 
 [lib]
-name = "clipstack_lib"
+name = "betterpaste_lib"
 # Desktop-only build: `cdylib`/`staticlib` are for the mobile targets and would
 # make the Windows linker export every public symbol (hitting the PE ordinal
 # limit), so the lib is `rlib` only.
 crate-type = ["rlib"]
+
+[[bin]]
+name = "betterPaste"
+path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2.7.1", features = [] }

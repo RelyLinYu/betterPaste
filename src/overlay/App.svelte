@@ -340,17 +340,23 @@
     await refresh();
     searchInput?.focus();
 
-    // 首次运行 / 启动提示：给一句看得见的说明，并在 6 秒后自己收起
-    // （它就是"打个招呼"，不该一直占着屏幕；想看再按一次热键）
-    const hint = await takeStartupHint().catch(() => null);
-    if (hint) {
-      showToast(hint, "info");
+    // 启动提示：可能"页面先 mount、后端后设置提示"，所以取不到就重试几次；
+    // 拿到之后 6 秒自动收起（它就是打招呼，不该一直占着屏幕）。
+    let hintDone = false;
+    const grabHint = async () => {
+      if (hintDone) return;
+      const h = await takeStartupHint().catch(() => null);
+      if (!h) return;
+      hintDone = true;
+      showToast(h, "info");
       setTimeout(() => hideOverlay(), 6000);
-    }
+    };
+    await grabHint();
+    [400, 900, 1600, 2600].forEach((d) => setTimeout(grabHint, d));
 
     unlisteners.push(
-      await listen("clipstack://changed", () => refresh()),
-      await listen("clipstack://paused", () => {}),
+      await listen("betterpaste://changed", () => refresh()),
+      await listen("betterpaste://paused", () => {}),
       // 设置面板改了主题 / 配置：立刻跟上，不用重开浮层
       await listen(EVENT_CONFIG_CHANGED, async () => {
         cfg = await getConfig().catch(() => cfg);

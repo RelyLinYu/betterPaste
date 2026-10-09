@@ -24,7 +24,7 @@
   import { applyTheme } from "../lib/theme";
 
   /** 后端在剪贴板历史发生变化时推送的事件（浮层里改动置顶后靠它同步）。 */
-  const EVENT_CHANGED = "clipstack://changed";
+  const EVENT_CHANGED = "betterpaste://changed";
 
   /** 这些组合被系统/常见应用占用，抢到手会直接破坏用户的日常操作。 */
   const DANGEROUS_HOTKEYS = new Set([
@@ -271,7 +271,7 @@
     }
   }
 
-  /** 把一次按键事件转成 clipstack 的热键串，例如 "Ctrl+Shift+V"。 */
+  /** 把一次按键事件转成 betterPaste 的热键串，例如 "Ctrl+Shift+V"。 */
   function shortcutFromEvent(e: KeyboardEvent): string | null {
     const mods: string[] = [];
     if (e.ctrlKey) mods.push("Ctrl");
@@ -358,7 +358,7 @@
 <div class="wrap">
   <header>
     <div>
-      <h1>clipstack 设置</h1>
+      <h1>betterPaste 设置</h1>
       <p class="muted sub">本地离线剪贴板历史 · 数据只存在你自己的电脑上</p>
     </div>
     <div class="header-actions">
@@ -530,7 +530,7 @@
           class="mono dir-input"
           type="text"
           bind:value={dirInput}
-          placeholder="例如 D:\clipstack-data"
+          placeholder="例如 D:\betterPaste-data"
           spellcheck="false"
         />
       </div>
@@ -552,7 +552,7 @@
     </section>
 
     <footer class="foot muted">
-      clipstack v0.1.0 · MIT License
+      betterPaste v0.1.0 · MIT License
       {#if savedAt}· 上次保存 {savedAt}{/if}
     </footer>
   {/if}

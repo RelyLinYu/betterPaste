@@ -8,12 +8,12 @@ use crate::{Error, Result};
 /// every list/search).
 static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
-/// `%APPDATA%\clipstack\` —— 永远是这个位置，用来放 `location.txt`（自定义数据目录的
+/// `%APPDATA%\betterPaste\` —— 永远是这个位置，用来放 `location.txt`（自定义数据目录的
 /// 指针）与默认数据。即使数据目录被改到别处，这个目录也继续存在。
 pub fn bootstrap_dir() -> Result<PathBuf> {
     let dir = dirs::data_dir()
         .ok_or_else(|| Error::Other("%APPDATA% 不可用".into()))?
-        .join("clipstack");
+        .join("betterPaste");
     ensure_dir(&dir)?;
     Ok(dir)
 }
@@ -24,9 +24,9 @@ pub fn location_file() -> Result<PathBuf> {
 }
 
 /// 实际数据目录，优先级：
-///   1. 环境变量 `CLIPSTACK_DATA_DIR`
-///   2. `%APPDATA%\clipstack\location.txt` 里的自定义路径
-///   3. `%APPDATA%\clipstack`
+///   1. 环境变量 `BETTERPASTE_DATA_DIR`
+///   2. `%APPDATA%\betterPaste\location.txt` 里的自定义路径
+///   3. `%APPDATA%\betterPaste`
 pub fn data_dir() -> Result<PathBuf> {
     if let Some(dir) = DATA_DIR.get() {
         return Ok(dir.clone());
@@ -37,7 +37,7 @@ pub fn data_dir() -> Result<PathBuf> {
 }
 
 fn resolve_data_dir() -> Result<PathBuf> {
-    if let Ok(raw) = std::env::var("CLIPSTACK_DATA_DIR") {
+    if let Ok(raw) = std::env::var("BETTERPASTE_DATA_DIR") {
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
             return Ok(PathBuf::from(trimmed));
@@ -104,7 +104,7 @@ pub fn copy_tree(from: &Path, to: &Path) -> Result<(u64, Vec<String>)> {
             || name.ends_with("-shm")
             || name.ends_with(".tmp")
             || name == "location.txt"
-            || name == "clipstack.db"
+            || name == "betterpaste.db"
         {
             continue;
         }
@@ -141,7 +141,7 @@ pub fn thumbs_dir() -> Result<PathBuf> {
 }
 
 pub fn db_path() -> Result<PathBuf> {
-    Ok(data_dir()?.join("clipstack.db"))
+    Ok(data_dir()?.join("betterpaste.db"))
 }
 
 pub fn config_path() -> Result<PathBuf> {
@@ -149,7 +149,7 @@ pub fn config_path() -> Result<PathBuf> {
 }
 
 pub fn log_path() -> Result<PathBuf> {
-    Ok(data_dir()?.join("clipstack.log"))
+    Ok(data_dir()?.join("betterpaste.log"))
 }
 
 pub fn ensure_dir(p: &PathBuf) -> Result<()> {

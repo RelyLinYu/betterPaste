@@ -157,7 +157,7 @@ pub fn run_with(start: StartWindow) {
             use tauri::Manager as _;
             let state = app.state::<Arc<AppState>>().inner().clone();
             // 第二实例的命令行必须被尊重：之前 argv 被整个丢掉，
-            // `clipstack.exe --settings` 只会切出浮层。
+            // `betterPaste.exe --settings` 只会切出浮层。
             if argv.iter().any(|a| a == "--settings") {
                 commands::show_window(app, SETTINGS);
             } else if argv.iter().any(|a| a == "--overlay") {
@@ -179,7 +179,7 @@ pub fn run_with(start: StartWindow) {
                 // 结果是每条日志出现两份。这里显式给唯一的文件 target。
                 .clear_targets()
                 .target(tauri_plugin_log::Target::new(
-                    tauri_plugin_log::TargetKind::LogDir { file_name: Some("clipstack".into()) },
+                    tauri_plugin_log::TargetKind::LogDir { file_name: Some("betterPaste".into()) },
                 ))
                 .level(log::LevelFilter::Info)
                 .build(),
@@ -230,12 +230,12 @@ pub fn run_with(start: StartWindow) {
                 let first_run = paths::config_path().map(|p| !p.exists()).unwrap_or(false);
                 let hint = if first_run {
                     format!(
-                        "第一次使用：按 {} 呼出历史，右上角 ⚙ 是设置；关掉这个窗口后 clipstack 仍会在托盘里继续记录",
+                        "第一次使用：按 {} 呼出历史，右上角 ⚙ 是设置；关掉这个窗口后 betterPaste 仍会在托盘里继续记录",
                         cfg.hotkey
                     )
                 } else {
                     format!(
-                        "clipstack 已在托盘里运行（右键托盘图标有菜单）· 按 {} 呼出历史",
+                        "betterPaste 已在托盘里运行（右键托盘图标有菜单）· 按 {} 呼出历史",
                         cfg.hotkey
                     )
                 };
@@ -265,7 +265,7 @@ pub fn run_with(start: StartWindow) {
                 StartWindow::None => {}
             }
 
-            log::info!("clipstack 已启动，数据目录：{}", paths::data_dir()?.display());
+            log::info!("betterPaste 已启动，数据目录：{}", paths::data_dir()?.display());
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -321,5 +321,5 @@ pub fn run_with(start: StartWindow) {
             commands::hide_overlay,
         ])
         .run(tauri::generate_context!())
-        .expect("clipstack 启动失败");
+        .expect("betterPaste 启动失败");
 }

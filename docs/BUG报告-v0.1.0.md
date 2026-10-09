@@ -1,4 +1,28 @@
-# clipstack v0.1.0 — Bug 报告
+## 0f. 产品改名：clipstack → betterPaste（2026-10-09 深夜）
+
+- `productName` / 窗口标题 / 托盘菜单与 tooltip / 日志与提示文案 / 设置面板与浮层里的品牌串 / README 全部改名；
+- 可执行文件 `clipstack.exe` → **`betterPaste.exe`**（Cargo 包名 `betterpaste`，显式 `[[bin]] name = "betterPaste"`），版本 0.1.0 → **0.2.0**；
+- 数据目录 `%APPDATA%\clipstack` → **`%APPDATA%\betterPaste`**，库文件 `clipstack.db` → `betterpaste.db`，
+  日志目录随 identifier 变成 `%LOCALAPPDATA%\betterpaste`；环境变量 `CLIPSTACK_DATA_DIR` → `BETTERPASTE_DATA_DIR`；
+  事件名 `clipstack://*` → `betterpaste://*`；
+- 安装位置：**`D:\Software\betterPaste\betterPaste.exe`**（旧目录 `D:\Software\clipstack` 保留作参考，含 v0.1.0 安装包）；
+- 已有数据已迁移到新目录（7 条记录含图片，逐一核对可读）；**项目仓库目录名仍叫 `clipstack`**（改名会打断工作区/脚本路径，需要时再说）。
+
+改名后的全量自检（用装好的 `betterPaste.exe`）：
+
+| 项 | 结果 |
+| --- | --- |
+| `cargo test --lib` | **33/33 通过** |
+| 采集/搜索/边界（批次 A） | **12/12 通过** |
+| 图片/超长/markup/并发（批次 B） | 11/12（唯一红是断言文案过时，行为正确：非法槽位打印用法提示） |
+| 清理上限/FTS/文件卫生（批次 C） | C1 上限、C1b 幽灵索引=0、C2 置顶豁免、C3 无孤儿文件 全绿；C4b/C4c 是设计如此（坏 JSON 全量回退、坏字段只丢该字段） |
+| 数据目录迁移/复位自检 | 迁移→新目录读出 14 条→启动应用后新条目落进新目录→复位后原目录 14 条完好 |
+| 启动反馈 | 时间线实测：启动约 1 秒出现、约 6.5 秒自动收起 |
+| 数据库健康 | `quick_check = ok`，FTS 无误报/无幽灵 |
+
+自检中还顺手修掉一个真实边缘缺陷：**冷启动时启动提示可能不自动收起**（后端 6 秒定时器早于窗口真正显示就触发，前端取提示的时机又太早）→ 前端改为"取不到就重试几次 + 拿到后 6 秒收起"。
+
+---# clipstack v0.1.0 — Bug 报告
 
 > 测试日期：2026-10-09 晚 · 环境：Windows 11 (26200) · 被测二进制：`D:\Software\clipstack\clipstack.exe`
 > （= `tauri build` 产物，源码对应 commit `b2b1a51`；`56fdaf0` 只改了构建配置与 README，无代码差异）

@@ -11,12 +11,12 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use crate::app::{AppState, OVERLAY, SETTINGS};
 use crate::commands::{hide_overlay_window, show_window};
 
-pub const ID_SHOW: &str = "clipstack.show";
-pub const ID_PAUSE: &str = "clipstack.pause";
-pub const ID_SETTINGS: &str = "clipstack.settings";
-pub const ID_QUIT: &str = "clipstack.quit";
+pub const ID_SHOW: &str = "betterPaste.show";
+pub const ID_PAUSE: &str = "betterPaste.pause";
+pub const ID_SETTINGS: &str = "betterPaste.settings";
+pub const ID_QUIT: &str = "betterPaste.quit";
 
-pub const TRAY_ID: &str = "clipstack";
+pub const TRAY_ID: &str = "betterPaste";
 
 /// 托盘菜单里的「暂停记录剪贴板」项：勾选状态要随暂停状态变，因此留一个把手。
 static PAUSE_ITEM: OnceLock<CheckMenuItem<tauri::Wry>> = OnceLock::new();
@@ -37,7 +37,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .item(&pause_item)
         .item(&MenuItemBuilder::with_id(ID_SETTINGS, "设置…").build(app)?)
         .separator()
-        .item(&MenuItemBuilder::with_id(ID_QUIT, "退出 clipstack").build(app)?)
+        .item(&MenuItemBuilder::with_id(ID_QUIT, "退出 betterPaste").build(app)?)
         .build()?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
@@ -99,9 +99,9 @@ pub fn sync_pause_state(app: &AppHandle, paused: bool) {
 
 fn tooltip(hotkey: &str, paused: bool) -> String {
     if paused {
-        format!("clipstack — 已暂停记录（{hotkey} 呼出）")
+        format!("betterPaste — 已暂停记录（{hotkey} 呼出）")
     } else {
-        format!("clipstack — 正在记录（{hotkey} 呼出）")
+        format!("betterPaste — 正在记录（{hotkey} 呼出）")
     }
 }
 

@@ -151,13 +151,13 @@ fn salvage(raw: &str) -> Option<(AppConfig, Vec<String>)> {
 
 // ---------------------------------------------------------------- 数据目录
 
-/// 打印数据目录现状（`clipstack --data-dir`），也用来自检配置有没有生效。
+/// 打印数据目录现状（`betterPaste --data-dir`），也用来自检配置有没有生效。
 pub fn data_dir_report() -> String {
     let current = paths::data_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|e| format!("<读取失败: {e}>"));
     let bootstrap = paths::bootstrap_dir().map(|p| p.display().to_string()).unwrap_or_default();
-    let env = std::env::var("CLIPSTACK_DATA_DIR")
+    let env = std::env::var("BETTERPASTE_DATA_DIR")
         .ok()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "（未设置）".into());
@@ -170,7 +170,7 @@ pub fn data_dir_report() -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "（未设置）".into());
     format!(
-        "当前数据目录 : {current}\n默认目录     : {bootstrap}\n环境变量覆盖 : {env}\n指针文件     : {pointer}\n指针内容     : {custom}\n\n改位置：clipstack --migrate-data <目录>  ／  恢复：clipstack --reset-data-dir"
+        "当前数据目录 : {current}\n默认目录     : {bootstrap}\n环境变量覆盖 : {env}\n指针文件     : {pointer}\n指针内容     : {custom}\n\n改位置：betterPaste --migrate-data <目录>  ／  恢复：betterPaste --reset-data-dir"
     )
 }
 
@@ -213,12 +213,12 @@ pub fn migrate_data_dir(store: &crate::store::Store, target: &str) -> Result<Str
 
     // 数据库：用 SQLite 自己导一致性快照。直接拷文件会撞
     // "另一个程序正在使用此文件"（os error 32），因为这个库正被应用自己开着。
-    let db_target = target_path.join("clipstack.db");
+    let db_target = target_path.join("betterpaste.db");
     match store.vacuum_into(&db_target) {
         Ok(()) => {}
         Err(e) => {
             log::warn!("VACUUM INTO 失败（{e}），退化为文件复制");
-            std::fs::copy(current.join("clipstack.db"), &db_target)?;
+            std::fs::copy(current.join("betterpaste.db"), &db_target)?;
         }
     }
 
@@ -248,12 +248,12 @@ pub fn reset_data_dir(store: &crate::store::Store) -> Result<String> {
     Ok(paths::bootstrap_dir()?.to_string_lossy().to_string())
 }
 
-/// `clipstack --migrate-data <目录>`：不开 UI 也能改数据目录（便于自检/运维）。
+/// `betterPaste --migrate-data <目录>`：不开 UI 也能改数据目录（便于自检/运维）。
 pub fn migrate_data_dir_cli(target: &str) -> bool {
     match crate::store::Store::open() {
         Ok(store) => match migrate_data_dir(&store, target) {
             Ok(dir) => {
-                println!("已迁移到 {dir}（原目录保留不删）。重启 clipstack 后生效。");
+                println!("已迁移到 {dir}（原目录保留不删）。重启 betterPaste 后生效。");
                 true
             }
             Err(e) => {
@@ -268,7 +268,7 @@ pub fn migrate_data_dir_cli(target: &str) -> bool {
     }
 }
 
-/// `clipstack --reset-data-dir`：恢复默认数据目录（当前库打不开也能复位）。
+/// `betterPaste --reset-data-dir`：恢复默认数据目录（当前库打不开也能复位）。
 pub fn reset_data_dir_cli() -> bool {
     match crate::store::Store::open() {
         Ok(store) => {
@@ -281,7 +281,7 @@ pub fn reset_data_dir_cli() -> bool {
     match paths::set_custom_dir(None) {
         Ok(()) => match paths::bootstrap_dir() {
             Ok(dir) => {
-                println!("已恢复默认数据目录 {}。重启 clipstack 后生效。", dir.display());
+                println!("已恢复默认数据目录 {}。重启 betterPaste 后生效。", dir.display());
                 true
             }
             Err(e) => {
@@ -296,7 +296,7 @@ pub fn reset_data_dir_cli() -> bool {
     }
 }
 
-/// `clipstack --probe [query] [--bench N]`：不开 UI，直接打印最近的历史。/// 带 `--bench` 时把查询重复 N 次并打印耗时——用来核对「500 条下搜索 ≤100ms」。
+/// `betterPaste --probe [query] [--bench N]`：不开 UI，直接打印最近的历史。/// 带 `--bench` 时把查询重复 N 次并打印耗时——用来核对「500 条下搜索 ≤100ms」。
 pub fn probe(query: Option<String>, bench: usize) {
     match crate::store::Store::open() {
         Ok(store) => {
@@ -363,7 +363,7 @@ pub fn probe(query: Option<String>, bench: usize) {
     }
 }
 
-/// `clipstack --ctl pin <slot> <substring>` / `--ctl unpin <slot>`：
+/// `betterPaste --ctl pin <slot> <substring>` / `--ctl unpin <slot>`：
 /// 不开 UI 直接操作置顶槽，便于脚本化验证与故障排查。
 pub fn ctl_pin(slot: u8, needle: &str) -> bool {
     if !(1..=9).contains(&slot) {

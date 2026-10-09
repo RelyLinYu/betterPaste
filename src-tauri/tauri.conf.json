@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "clipstack",
-  "version": "0.1.0",
-  "identifier": "clipstack",
+  "productName": "betterPaste",
+  "version": "0.2.0",
+  "identifier": "betterPaste",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "overlay",
-        "title": "clipstack",
+        "title": "betterPaste",
         "url": "overlay.html",
         "width": 760,
         "height": 480,
@@ -32,7 +32,7 @@
       },
       {
         "label": "settings",
-        "title": "clipstack 设置",
+        "title": "betterPaste 设置",
         "url": "settings.html",
         "width": 720,
         "height": 620,

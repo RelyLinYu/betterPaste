@@ -1,6 +1,6 @@
 {
-  "name": "clipstack",
-  "version": "0.1.0",
+  "name": "betterpaste",
+  "version": "0.2.0",
   "private": true,
   "license": "MIT",
   "description": "Clipboard history manager for Windows — a full replacement for Win+V",

@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="src-tauri/icons/128x128@2x.png" width="112" alt="clipstack icon" />
+<img src="src-tauri/icons/128x128@2x.png" width="112" alt="betterPaste icon" />
 
-# clipstack
+# betterPaste
 
 **A clipboard history manager for Windows — a drop-in replacement for `Win+V`.**
 
@@ -12,7 +12,7 @@ Offline · Fast · Keyboard-first · Image support · Pinned slots
 
 ---
 
-![clipstack overlay](docs/shot-overlay.png)
+![betterPaste overlay](docs/shot-overlay.png)
 
 <p align="center"><em>The overlay: search on the left, live preview on the right, pinned slots numbered.</em></p>
 
@@ -23,12 +23,12 @@ Offline · Fast · Keyboard-first · Image support · Pinned slots
 
 Windows' built-in clipboard history (`Win+V`) is fine until you need to **search it
 in Chinese**, keep **images** around, or paste code with **byte-exact indentation**.
-`clipstack` does all three, stays completely offline, and never takes your focus away
+`betterPaste` does all three, stays completely offline, and never takes your focus away
 from the window you were typing in.
 
 ## Install
 
-Grab `clipstack_0.1.0_x64-setup.exe` from the [latest release](../../releases/latest)
+Grab `betterPaste_0.1.0_x64-setup.exe` from the [latest release](../../releases/latest)
 and run it. The installer is per-user, so no admin prompt.
 
 > **Windows SmartScreen**: the binary is not code-signed, so the first run may show
@@ -50,7 +50,7 @@ and run it. The installer is per-user, so no admin prompt.
 
 Everything is also clickable; double-clicking a row pastes it.
 
-Right-click the tray icon for **打开剪贴板历史 / 暂停记录 / 设置… / 退出 clipstack**.
+Right-click the tray icon for **打开剪贴板历史 / 暂停记录 / 设置… / 退出 betterPaste**.
 
 ### Settings
 
@@ -66,8 +66,8 @@ The settings window (tray → *设置…*) covers:
 ## Where your data lives
 
 ```
-%APPDATA%\clipstack\
-├── clipstack.db      SQLite (entries + FTS5 full-text index)
+%APPDATA%\betterPaste\
+├── betterpaste.db      SQLite (entries + FTS5 full-text index)
 ├── images\           full-size clipboard images (PNG)
 ├── thumbs\           generated thumbnails
 └── config.json       your settings
@@ -115,14 +115,14 @@ $env:CARGO_HOME='D:\Software\Rust\cargo'; $env:RUSTUP_HOME='D:\Software\Rust\rus
 ```
 
 These are **build-time only** dependencies. The shipped `*_setup.exe` bundles the
-already-compiled `clipstack.exe` plus the WebView2 loader, so an end user needs
+already-compiled `betterPaste.exe` plus the WebView2 loader, so an end user needs
 nothing but Windows (WebView2 is preinstalled on Windows 11 and shipped by the
 installer otherwise) — no Rust, no GCC, no Node.
 
 Two build constraints worth knowing:
 
 1. **Keep the checkout on a pure ASCII path** (this project lives at
-   `D:\Dsh_Work\projects\clipstack`). MinGW's `windres` / `dlltool` cannot open
+   `D:\Dsh_Work\projects\betterPaste`). MinGW's `windres` / `dlltool` cannot open
    files under a path with non-ASCII characters and the link fails with
    `can't open icon file ... Invalid argument`. That is why the repo was moved off
    its original Chinese path; no `target-dir` redirect is needed any more, the
@@ -136,10 +136,10 @@ The single binary is also a small diagnostic tool (see the acceptance report for
 full list):
 
 ```powershell
-clipstack.exe --probe "keyword" --bench 30   # search + latency benchmark
-clipstack.exe --ctl pin 3 "some text"        # pin a row to a slot
-clipstack.exe --overlay                      # show the overlay right away
-clipstack.exe --settings                     # show the settings window
+betterPaste.exe --probe "keyword" --bench 30   # search + latency benchmark
+betterPaste.exe --ctl pin 3 "some text"        # pin a row to a slot
+betterPaste.exe --overlay                      # show the overlay right away
+betterPaste.exe --settings                     # show the settings window
 ```
 
 `scripts/gen-icon.mjs` regenerates the source app icon with zero dependencies.
