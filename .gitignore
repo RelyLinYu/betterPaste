@@ -1,0 +1,33 @@
+# --- Node / front-end ---
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+
+# --- Rust / Tauri ---
+target/
+src-tauri/target/
+src-tauri/gen/schemas/
+src-tauri/.cargo/
+**/*.rs.bk
+
+# --- Local build tooling + logs ---
+.setup/
+.appdata/
+*.log
+
+# --- Harness/session state ---
+.dsh-meow/
+
+# --- Editor / OS ---
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Mobile scaffolding produced by `tauri icon` (not shipped) ---
+src-tauri/icons/android/
+src-tauri/icons/ios/

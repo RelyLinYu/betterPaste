@@ -1,0 +1,149 @@
+/* ------------------------------------------------------------------
+   Shared design tokens. `data-theme` on <html> is set by the app to
+   `light` / `dark`; without it we follow the OS.
+   ------------------------------------------------------------------ */
+
+:root {
+  --font: -apple-system, "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI",
+    system-ui, sans-serif;
+  --mono: "Cascadia Mono", "JetBrains Mono", Consolas, "Courier New", monospace;
+
+  --bg: #f6f6f8;
+  --bg-elev: #ffffff;
+  --bg-sunken: #ededf1;
+  --border: rgba(0, 0, 0, 0.09);
+  --border-strong: rgba(0, 0, 0, 0.16);
+  --fg: #1c1c22;
+  --fg-muted: #6b6b78;
+  --fg-faint: #9a9aa8;
+  --accent: #6366f1;
+  --accent-fg: #ffffff;
+  --accent-soft: rgba(99, 102, 241, 0.12);
+  --danger: #dc2626;
+  --warn: #d97706;
+  --shadow: 0 18px 48px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.1);
+  --radius: 14px;
+  --radius-sm: 9px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #17171c;
+    --bg-elev: #1f1f26;
+    --bg-sunken: #131318;
+    --border: rgba(255, 255, 255, 0.1);
+    --border-strong: rgba(255, 255, 255, 0.2);
+    --fg: #ececf2;
+    --fg-muted: #a0a0b0;
+    --fg-faint: #6e6e7e;
+    --accent: #818cf8;
+    --accent-fg: #14141a;
+    --accent-soft: rgba(129, 140, 248, 0.16);
+    --danger: #f87171;
+    --warn: #fbbf24;
+    --shadow: 0 18px 56px rgba(0, 0, 0, 0.6), 0 2px 10px rgba(0, 0, 0, 0.4);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #17171c;
+  --bg-elev: #1f1f26;
+  --bg-sunken: #131318;
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.2);
+  --fg: #ececf2;
+  --fg-muted: #a0a0b0;
+  --fg-faint: #6e6e7e;
+  --accent: #818cf8;
+  --accent-fg: #14141a;
+  --accent-soft: rgba(129, 140, 248, 0.16);
+  --danger: #f87171;
+  --warn: #fbbf24;
+  --shadow: 0 18px 56px rgba(0, 0, 0, 0.6), 0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font);
+  color: var(--fg);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The window is transparent so the panel can keep rounded corners and a soft
+   shadow. `backdrop-filter` cannot be trusted inside WebView2, so the panel must
+   paint an opaque colour — a translucent panel lets the window behind bleed
+   through the page (verified by screenshot). */
+html {
+  background: transparent;
+}
+
+body.overlay-body {
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+}
+
+body.settings-body {
+  background: var(--bg);
+  overflow-y: auto;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+input,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 99px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg-sunken);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg-muted);
+}
+
+.muted {
+  color: var(--fg-muted);
+}
+
+.faint {
+  color: var(--fg-faint);
+}
