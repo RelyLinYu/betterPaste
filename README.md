@@ -12,6 +12,11 @@
 
 ---
 
+![betterPaste 演示](docs/demo.gif)
+
+<p align="center"><em>按 <code>Ctrl+Shift+V</code> 唤出 → 输入关键词过滤 → 回车粘贴。
+完整 21 秒介绍片：<a href="docs/betterPaste-promo.mp4">docs/betterPaste-promo.mp4</a></em></p>
+
 ![betterPaste 浮层](docs/shot-overlay.png)
 
 <p align="center"><em>浮层：左边搜索与列表，右边实时预览，置顶槽位带编号。</em></p>
