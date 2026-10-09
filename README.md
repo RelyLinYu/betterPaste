@@ -106,17 +106,27 @@ cargo test --lib --manifest-path src-tauri/Cargo.toml   # 25 unit tests
 ```
 
 Because this machine has no MSVC, the toolchain is
-`stable-x86_64-pc-windows-gnu` with MinGW-w64. Two consequences:
+`stable-x86_64-pc-windows-gnu` with MinGW-w64. Every cargo invocation needs the
+custom rustup/cargo homes:
 
 ```powershell
 # every cargo invocation needs the custom rustup/cargo homes
 $env:CARGO_HOME='D:\Software\Rust\cargo'; $env:RUSTUP_HOME='D:\Software\Rust\rustup'
 ```
 
-1. **The project path must be pure ASCII.** MinGW's `windres` and `dlltool` cannot
-   open files under a path containing non-ASCII characters, and the link fails with
-   `can't open icon file ... Invalid argument`. Keep the checkout at e.g.
-   `D:\...\projects\clipstack`.
+These are **build-time only** dependencies. The shipped `*_setup.exe` bundles the
+already-compiled `clipstack.exe` plus the WebView2 loader, so an end user needs
+nothing but Windows (WebView2 is preinstalled on Windows 11 and shipped by the
+installer otherwise) — no Rust, no GCC, no Node.
+
+Two build constraints worth knowing:
+
+1. **Keep the checkout on a pure ASCII path** (this project lives at
+   `D:\Dsh_Work\projects\clipstack`). MinGW's `windres` / `dlltool` cannot open
+   files under a path with non-ASCII characters and the link fails with
+   `can't open icon file ... Invalid argument`. That is why the repo was moved off
+   its original Chinese path; no `target-dir` redirect is needed any more, the
+   default `target/` is used (verified with a clean `cargo check`, 2026-10-09).
 2. `Cargo.toml` uses `crate-type = ["rlib"]` only — adding `cdylib` makes GNU ld try
    to export every public symbol and fail with `export ordinal too large`.
 

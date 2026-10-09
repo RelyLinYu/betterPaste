@@ -1,4 +1,7 @@
-﻿# GNU toolchain note: binutils' dlltool cannot handle a non-ASCII path, so the
-# build output is redirected to an ASCII-only directory (see README).
-[build]
-target-dir = "D:/Software/_rustbuild/clipstack"
+# The build output uses the default `target/` inside this project.
+#
+# History: the project used to live under a path containing Chinese characters,
+# where binutils' dlltool failed; that was worked around by redirecting the
+# target dir to D:\Software\_rustbuild\clipstack. The project has since moved to
+# this ASCII-only path, and a clean `cargo check` against the default target dir
+# was verified to work (2026-10-09, exit 0), so the redirect is gone.
