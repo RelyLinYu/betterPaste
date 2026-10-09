@@ -360,6 +360,27 @@ impl Store {
         Ok(())
     }
 
+    /// 把当前数据库**一致性快照**写到 `target`。
+    ///
+    /// 数据目录迁移不能直接 `std::fs::copy` 数据库文件：应用正开着这个库，
+    /// Windows 上会直接撞 ERROR_SHARING_VIOLATION（"另一个程序正在使用此文件"，
+    /// os error 32），而且就算拷成功也可能是半截状态。`VACUUM INTO` 由 SQLite
+    /// 自己保证快照一致，运行中也安全。
+    pub fn vacuum_into(&self, target: &std::path::Path) -> Result<()> {
+        // 自拷贝保护：目标就是当前库的话，SQLite 会把库自己清掉
+        if let Ok(live) = paths::db_path() {
+            if paths::same_path(&live, target) {
+                return Err(Error::Other("目标数据库就是当前数据库，已拒绝".into()));
+            }
+        }
+        if target.exists() {
+            std::fs::remove_file(target)?;
+        }
+        self.conn
+            .execute("VACUUM INTO ?1", params![target.to_string_lossy().to_string()])?;
+        Ok(())
+    }
+
     // ---------------------------------------------------------------- reads
 
     pub fn get(&self, uid: &str) -> Result<Option<ClipEntry>> {

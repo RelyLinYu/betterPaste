@@ -198,16 +198,38 @@ pub fn migrate_data_dir(store: &crate::store::Store, target: &str) -> Result<Str
             current.display()
         )));
     }
+    // 自拷贝保护：目标就是当前目录时，复制会把数据库清成 0 字节（踩过一次，数据全丢）
+    if paths::same_path(&current, &target_path) {
+        return Err(Error::Other("目标目录就是当前数据目录".into()));
+    }
     let current_canon = std::fs::canonicalize(&current).unwrap_or(current.clone());
     if current_canon == target_path {
         return Err(Error::Other("目标目录就是当前数据目录".into()));
     }
-    // 先把 WAL 落回主库：copy_tree 会跳过 -wal/-shm，不 checkpoint 就会漏掉最近的记录
-    store.checkpoint()?;
-    let bytes = paths::copy_tree(&current, &target_path)?;
+    // 先把 WAL 落回主库（拿不到也没关系，VACUUM INTO 依然能导出一致快照）
+    if let Err(e) = store.checkpoint() {
+        log::warn!("迁移前 checkpoint 失败（继续）: {e}");
+    }
+
+    // 数据库：用 SQLite 自己导一致性快照。直接拷文件会撞
+    // "另一个程序正在使用此文件"（os error 32），因为这个库正被应用自己开着。
+    let db_target = target_path.join("clipstack.db");
+    match store.vacuum_into(&db_target) {
+        Ok(()) => {}
+        Err(e) => {
+            log::warn!("VACUUM INTO 失败（{e}），退化为文件复制");
+            std::fs::copy(current.join("clipstack.db"), &db_target)?;
+        }
+    }
+
+    // 其余文件（图片 / 缩略图 / 配置）尽力而为地复制，单个失败不影响整体
+    let (bytes, failed) = paths::copy_tree(&current, &target_path)?;
+    if !failed.is_empty() {
+        log::warn!("有 {} 个文件没能复制过去：{}", failed.len(), failed.join("、"));
+    }
     paths::set_custom_dir(Some(&target_path))?;
     log::info!(
-        "数据目录迁移到 {}（复制 {} 字节，原目录保留），重启后生效",
+        "数据目录迁移到 {}（数据库快照 + 复制 {} 字节，原目录保留），重启后生效",
         target_clean,
         bytes
     );

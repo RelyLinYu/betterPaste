@@ -66,24 +66,66 @@ pub fn set_custom_dir(path: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-/// 递归复制数据目录（跳过 SQLite 的 `-wal/-shm` 与临时文件）。
-pub fn copy_tree(from: &Path, to: &Path) -> Result<u64> {
+/// 判断两个路径是否指向同一个文件/目录。
+///
+/// 这是"自拷贝保护"的核心：Windows 上 `CopyFileEx` 的源和目标如果是同一个文件，
+/// 会先把目标截断再读，结果**整份文件变成 0**（数据目录迁移就差点这么毁掉用户数据）。
+/// 不存在的一方退化为"父目录 canonicalize + 文件名"再比，避免文件还没创建时漏判。
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    fn norm(p: &Path) -> String {
+        let abs = std::fs::canonicalize(p).unwrap_or_else(|_| match (p.parent(), p.file_name()) {
+            (Some(parent), Some(name)) => std::fs::canonicalize(parent)
+                .map(|c| c.join(name))
+                .unwrap_or_else(|_| p.to_path_buf()),
+            _ => p.to_path_buf(),
+        });
+        abs.to_string_lossy()
+            .replace('/', "\\")
+            .trim_start_matches(r"\\?\")
+            .trim_end_matches('\\')
+            .to_lowercase()
+    }
+    norm(a) == norm(b)
+}
+
+/// 递归复制数据目录里的**普通文件**（跳过 SQLite 的 `-wal/-shm`、临时文件、
+/// 指针文件与数据库本体——数据库由 `Store::vacuum_into` 单独导快照）。
+///
+/// 单个文件复制失败（被占用/权限）不再让整个迁移失败：记下来继续，
+/// 返回 `(复制的字节数, 失败的文件名列表)`。
+pub fn copy_tree(from: &Path, to: &Path) -> Result<(u64, Vec<String>)> {
     ensure_dir(&to.to_path_buf())?;
     let mut bytes = 0u64;
+    let mut failed: Vec<String> = Vec::new();
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.ends_with("-wal") || name.ends_with("-shm") || name.ends_with(".tmp") || name == "location.txt" {
+        if name.ends_with("-wal")
+            || name.ends_with("-shm")
+            || name.ends_with(".tmp")
+            || name == "location.txt"
+            || name == "clipstack.db"
+        {
             continue;
         }
         let target = to.join(&name);
+        // 源和目标同一个东西时一定要跳过，否则会把文件清成 0 字节
+        if same_path(&entry.path(), &target) {
+            failed.push(format!("{name}（源与目标相同，已跳过）"));
+            continue;
+        }
         if entry.file_type()?.is_dir() {
-            bytes += copy_tree(&entry.path(), &target)?;
+            let (b, mut f) = copy_tree(&entry.path(), &target)?;
+            bytes += b;
+            failed.append(&mut f);
         } else {
-            bytes += std::fs::copy(entry.path(), &target)?;
+            match std::fs::copy(entry.path(), &target) {
+                Ok(n) => bytes += n,
+                Err(e) => failed.push(format!("{name}（{e}）")),
+            }
         }
     }
-    Ok(bytes)
+    Ok((bytes, failed))
 }
 
 pub fn images_dir() -> Result<PathBuf> {
