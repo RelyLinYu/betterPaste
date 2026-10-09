@@ -1,149 +1,155 @@
 <div align="center">
 
-<img src="src-tauri/icons/128x128@2x.png" width="112" alt="betterPaste icon" />
+<img src="src-tauri/icons/128x128@2x.png" width="112" alt="betterPaste 图标" />
 
 # betterPaste
 
-**A clipboard history manager for Windows — a drop-in replacement for `Win+V`.**
+**Windows 剪贴板历史工具 —— 全面替代 `Win+V`。**
 
-Offline · Fast · Keyboard-first · Image support · Pinned slots
+完全离线 · 快 · 键盘优先 · 支持图片 · 置顶槽位
 
 </div>
 
 ---
 
-![betterPaste overlay](docs/shot-overlay.png)
+![betterPaste 浮层](docs/shot-overlay.png)
 
-<p align="center"><em>The overlay: search on the left, live preview on the right, pinned slots numbered.</em></p>
+<p align="center"><em>浮层：左边搜索与列表，右边实时预览，置顶槽位带编号。</em></p>
 
-<!-- 动图占位：发布前补上 docs/demo.gif -->
-<!-- ![demo](docs/demo.gif) -->
+## 为什么做它
 
-## Why
+Windows 自带的剪贴板历史（`Win+V`）能用，但一旦你需要**用中文搜索**、留住**图片**、
+或者粘贴带**逐字节缩进**的代码，它就力不从心了。betterPaste 把这三件事都做了，
+全程离线，而且从不把你正在打字的那个窗口弄丢焦点。
 
-Windows' built-in clipboard history (`Win+V`) is fine until you need to **search it
-in Chinese**, keep **images** around, or paste code with **byte-exact indentation**.
-`betterPaste` does all three, stays completely offline, and never takes your focus away
-from the window you were typing in.
+## 安装
 
-## Install
+到 [最新发布](../../releases/latest) 下载 `betterPaste_0.2.2_x64-setup.exe` 直接运行。
+安装是「当前用户」模式，**不会弹 UAC**，卸载走系统的「应用和功能」即可。
 
-Grab `betterPaste_0.1.0_x64-setup.exe` from the [latest release](../../releases/latest)
-and run it. The installer is per-user, so no admin prompt.
+> **SmartScreen 提示**：程序没有做代码签名，首次运行会看到
+> 「Windows 已保护你的电脑」，点 **更多信息 → 仍要运行** 就行。
+> 发布说明里会给出安装包的 SHA-256，方便你核对下载是否完整。
 
-> **Windows SmartScreen**: the binary is not code-signed, so the first run may show
-> *"Windows protected your PC"*. Click **More info → Run anyway**.
-> You can verify what you downloaded against the SHA-256 published in the release notes.
+## 用法
 
-## Usage
-
-| Action | Shortcut |
+| 操作 | 快捷键 |
 | --- | --- |
-| Open history overlay | `Ctrl+Shift+V` (rebindable) |
-| Select | `↑` / `↓` / `PgUp` / `PgDn` |
-| Paste into the window you came from | `Enter` |
-| Copy without pasting | `Shift+Enter` |
-| Paste a pinned slot directly | `Ctrl+Shift+1` … `Ctrl+Shift+9` |
-| Pin / unpin the selection | `Ctrl+P` |
-| Delete one entry | `Ctrl+Del` |
-| Close | `Esc` |
+| 打开历史浮层 | `Ctrl+Shift+V`（可改） |
+| 上下选择 | `↑` `↓` `PgUp` `PgDn` |
+| 粘贴到原来的窗口 | `Enter` |
+| 只复制不粘贴 | `Shift+Enter` |
+| 直接粘贴某个置顶槽位 | `Ctrl+Shift+1` … `Ctrl+Shift+9` |
+| 置顶 / 取消置顶 | `F2`（或行尾 📌 按钮选槽位） |
+| 删除当前条目 | `Del` |
+| 勾选多条（`Space` 勾、`Ctrl+点击` 也行） | `Del` 批量删除 |
+| 关闭 | `Esc` |
 
-Everything is also clickable; double-clicking a row pastes it.
+界面上的东西都能点，**双击某一行就是粘贴**。
 
-Right-click the tray icon for **打开剪贴板历史 / 暂停记录 / 设置… / 退出 betterPaste**.
+右键托盘图标有：**打开剪贴板历史 / 暂停记录剪贴板 / 设置… / 退出 betterPaste**。
+「暂停记录」是个勾选项，暂停期间复制的东西不会进历史（托盘提示里会写当前状态）。
 
-### Settings
+### 设置
 
-The settings window (tray → *设置…*) covers:
+托盘 →「设置…」（或浮层左上角 ⚙）可以调：
 
-* history limits — **entry count / retention days / per-item size**
-* what gets captured — text, images
-* the overlay hotkey and all nine slot hotkeys (click the field, press the combo)
-* theme — follow system / light / dark
-* paste behaviour, hide-on-blur, launch at login
-* the data directory, plus *clear unpinned* / *clear all*
+* **历史与清理** —— 条数上限 / 保留天数 / 单条体积上限，以及「清空未置顶记录」「清空全部记录」
+* **记录内容** —— 文本、图片各自是否记录
+* **热键** —— 浮层热键 + 九个槽位热键（点输入框再按组合键即可录入）
+* **外观** —— 跟随系统 / 浅色 / 深色
+* **粘贴行为** —— 是否自动粘贴、失焦是否收起、开机自启
+* **数据目录** —— 打开目录、迁移到别处、恢复默认位置
 
-## Where your data lives
+![betterPaste 设置](docs/shot-settings.png)
+
+## 数据放在哪
 
 ```
 %APPDATA%\betterPaste\
-├── betterpaste.db      SQLite (entries + FTS5 full-text index)
-├── images\           full-size clipboard images (PNG)
-├── thumbs\           generated thumbnails
-└── config.json       your settings
+├── betterpaste.db      SQLite（条目 + FTS5 全文索引）
+├── images\           剪贴板图片原图（PNG）
+├── thumbs\           缩略图
+└── config.json       你的设置
 ```
 
-Nothing is encrypted and nothing leaves the machine — there is **no network code in
-this app at all**. If you want it gone, delete that folder.
+数据**不加密、也永远不出这台电脑** —— 这个程序里压根没有网络代码。
+想彻底清干净，删掉这个目录即可。
 
-## What it does *not* do (by design)
+## 它不做什么（有意为之）
 
-Rich text / HTML, file-and-folder history, templating, encryption, cloud sync, code
-signing, macOS / Linux. See [`docs/验收报告.md`](docs/验收报告.md) for the measured
-results against every acceptance criterion, and `架构与验收标准.md` for the decision log.
+富文本 / HTML、文件和文件夹历史、模板粘贴、加密、云同步、代码签名、macOS / Linux。
 
-Known limitation worth stating up front: the clipboard is watched by **polling the
-Windows clipboard sequence number every 60 ms**. Human-speed copying is captured
-100 % (100/100 in testing), but a script that copies dozens of times per second will
-outrun the sampler. Fixing that properly means switching to
-`AddClipboardFormatListener` with a message-only window — planned, not in v0.1.
+一个值得先说明的已知限制：剪贴板是靠**每 60 ms 轮询 Windows 剪贴板序号**来监听的。
+人手速度的复制 100% 抓得到（实测 100/100），但脚本每秒复制几十次会跑赢采样器。
+彻底解决要换成带消息窗口的 `AddClipboardFormatListener` —— 计划中，不在 v0.2。
 
-## Built with
+## 技术栈
 
-**Tauri 2 + Rust** for the system layer and **TypeScript + Svelte 5 + Vite** for the
-UI. Storage is SQLite via `rusqlite` (FTS5 for search, `LIKE` as a Chinese-friendly
-fallback), the clipboard is read with `arboard` and written through the Win32
-`CF_UNICODETEXT` / DIB formats, and the paste path uses `GetForegroundWindow` +
-`SendInput` so the keystroke always lands in the window you started from.
+系统层 **Tauri 2 + Rust**，界面 **TypeScript + Svelte 5 + Vite**。
+存储用 `rusqlite`（搜索走 FTS5，再用 `LIKE` 子串兜底，所以中文照样搜得到），
+剪贴板读写走 `arboard` 与 Win32 的 `CF_UNICODETEXT` / DIB 格式，
+粘贴路径用 `GetForegroundWindow` + `SendInput`，保证按键落在你出发时的那个窗口。
 
-### Hacking on it
+### 本地构建
 
 ```powershell
 npm install
-npm run app:dev      # tauri dev — hot-reloading overlay + settings
-npm run app:build    # tauri build — produces the NSIS installer
-cargo test --lib --manifest-path src-tauri/Cargo.toml   # 25 unit tests
+npm run app:dev      # tauri dev：浮层与设置面板都能热重载
+npm run app:build    # tauri build：产出 NSIS 安装包
+cargo test --lib --manifest-path src-tauri/Cargo.toml   # 35 个单元测试
 ```
 
-Because this machine has no MSVC, the toolchain is
-`stable-x86_64-pc-windows-gnu` with MinGW-w64. Every cargo invocation needs the
-custom rustup/cargo homes:
+工具链是 `stable-x86_64-pc-windows-gnu` + MinGW-w64（不需要 MSVC）。
+若你把 Rust/GCC 装在自定义位置，构建前要先指好环境变量：
 
 ```powershell
-# every cargo invocation needs the custom rustup/cargo homes
-$env:CARGO_HOME='D:\Software\Rust\cargo'; $env:RUSTUP_HOME='D:\Software\Rust\rustup'
+$env:CARGO_HOME='<你的 cargo 目录>'; $env:RUSTUP_HOME='<你的 rustup 目录>'
 ```
 
-These are **build-time only** dependencies. The shipped `*_setup.exe` bundles the
-already-compiled `betterPaste.exe` plus the WebView2 loader, so an end user needs
-nothing but Windows (WebView2 is preinstalled on Windows 11 and shipped by the
-installer otherwise) — no Rust, no GCC, no Node.
+这些只是**编译期**依赖：发布出去的 `*_setup.exe` 里已经打包好编译完成的
+`betterPaste.exe` 与 WebView2 Loader，终端用户只要有 Windows 就行 ——
+不需要 Rust、不需要 GCC、也不需要 Node。
 
-Two build constraints worth knowing:
+两条构建约束值得知道：
 
-1. **Keep the checkout on a pure ASCII path** (this project lives at
-   `D:\Dsh_Work\projects\betterPaste`). MinGW's `windres` / `dlltool` cannot open
-   files under a path with non-ASCII characters and the link fails with
-   `can't open icon file ... Invalid argument`. That is why the repo was moved off
-   its original Chinese path; no `target-dir` redirect is needed any more, the
-   default `target/` is used (verified with a clean `cargo check`, 2026-10-09).
-2. `Cargo.toml` uses `crate-type = ["rlib"]` only — adding `cdylib` makes GNU ld try
-   to export every public symbol and fail with `export ordinal too large`.
+1. **仓库路径保持纯 ASCII**。MinGW 的 `windres` / `dlltool` 打不开含非 ASCII 字符的路径，
+   链接会以 `can't open icon file ... Invalid argument` 失败。
+2. `Cargo.toml` 的 `crate-type` 只用 `["rlib"]` —— 加上 `cdylib` 会让 GNU ld 试图导出全部符号，
+   以 `export ordinal too large` 失败。
 
-### Debug / ops entry points
+### 运维 / 诊断入口
 
-The single binary is also a small diagnostic tool (see the acceptance report for the
-full list):
+同一个 exe 也是个小的诊断工具（完整清单见验收报告）：
 
 ```powershell
-betterPaste.exe --probe "keyword" --bench 30   # search + latency benchmark
-betterPaste.exe --ctl pin 3 "some text"        # pin a row to a slot
-betterPaste.exe --overlay                      # show the overlay right away
-betterPaste.exe --settings                     # show the settings window
+betterPaste.exe --probe "关键词" --bench 30   # 搜索 + 延迟基准
+betterPaste.exe --ctl pin 3 "某段文本"          # 把某条记录钉到槽位
+betterPaste.exe --overlay                      # 立刻亮出浮层
+betterPaste.exe --settings                     # 打开设置面板
+betterPaste.exe --data-dir                     # 看当前数据目录
+betterPaste.exe --migrate-data <目录>           # 迁移数据（复制，不删原目录）
+betterPaste.exe --reset-data-dir               # 恢复默认数据目录
 ```
 
-`scripts/gen-icon.mjs` regenerates the source app icon with zero dependencies.
+`scripts/gen-icon.mjs` 零依赖重生成应用图标（`npx tauri icon assets/icon.png` 再展开成整套尺寸）。
 
-## License
+### 最近变化
+
+- **v0.2.2** —— 同一张图片紧接着复制两次只记一条（截图工具一次复制常触发两次剪贴板变化）；
+  旧数据库启动时自动补列，无需手工迁移。
+- **v0.2.1** —— 重新设计应用图标；安装包补齐图标 / 头图 / 侧边图（不再是 NSIS 默认图标）。
+- **v0.2.0** —— 产品改名 betterPaste；数据目录与配置随之更名。
+
+更早的实测结论、每个验收项的实测数字与踩坑记录都在
+[`docs/验收报告.md`](docs/验收报告.md) 与 [`docs/BUG报告-v0.1.0.md`](docs/BUG报告-v0.1.0.md)。
+
+## 许可证
 
 [MIT](LICENSE)
+
+---
+
+<sub>English: betterPaste is an offline clipboard-history manager for Windows
+(Tauri 2 + Rust + Svelte) — searchable Chinese text, images, byte-exact code
+paste, and nine pinned slots. No network code, no telemetry, no signing.</sub>

@@ -552,7 +552,7 @@
     </section>
 
     <footer class="foot muted">
-      betterPaste v0.2.1 · MIT License
+      betterPaste v0.2.2 · MIT License
       {#if savedAt}· 上次保存 {savedAt}{/if}
     </footer>
   {/if}
