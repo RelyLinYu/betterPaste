@@ -1,0 +1,78 @@
+[package]
+name = "betterpaste"
+version = "0.2.2"
+description = "Clipboard history manager for Windows"
+authors = ["betterPaste"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "betterpaste_lib"
+# Desktop-only build: `cdylib`/`staticlib` are for the mobile targets and would
+# make the Windows linker export every public symbol (hitting the PE ordinal
+# limit), so the lib is `rlib` only.
+crate-type = ["rlib"]
+
+[[bin]]
+name = "betterPaste"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.7.1", features = [] }
+
+[dependencies]
+# Tauri 2.x only — a bare "2" would also match 3.0.0-alpha pre-releases.
+# `protocol-asset` 是 assetProtocol（图片预览用 asset:// 协议）所必需的 feature，
+# 缺了它 tauri-build 会直接拒绝构建。
+tauri = { version = "2.12.2", features = ["tray-icon", "image-png", "protocol-asset"] }
+tauri-plugin-global-shortcut = "2.4.0"
+tauri-plugin-single-instance = "2.5.2"
+tauri-plugin-opener = "2.7.0"
+tauri-plugin-autostart = "2.7.0"
+tauri-plugin-log = "2.10.0"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+uuid = { version = "1", features = ["v4"] }
+parking_lot = "0.12"
+dirs = "6"
+log = "0.4"
+
+rusqlite = { version = "0.37", features = ["bundled"] }
+arboard = { version = "3", features = ["image-data"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.61"
+features = [
+  "Win32_Foundation",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+]
+
+# 关掉 WebView2 的浏览器快捷键（Ctrl+P 打印、F5 刷新、Ctrl+F 查找…）：
+# 对一个"原生小工具"来说这些行为很出戏，而且 Ctrl+P 会把按键整个吃掉，
+# 让浮层里的 Ctrl+P=置顶 永远收不到事件。
+[target.'cfg(windows)'.dependencies.webview2-com]
+version = "0.39"
+
+# `.cast::<ICoreWebView2Settings3>()` 需要与 webview2-com 同一套 windows-core 的
+# Interface trait，所以这里显式引一份同版本的 windows（重命名成 windows62 避免
+# 和上面 0.61 那份冲突）。
+[target.'cfg(windows)'.dependencies.windows62]
+package = "windows"
+version = "0.62"
+features = ["Win32_Foundation"]
+
+[features]
+# Tauri v2 default: custom-protocol is enabled by `tauri build`.
+custom-protocol = ["tauri/custom-protocol"]
+
+# NOTE: release profiles live in the workspace root manifest (../Cargo.toml).
+# Anything written here would be ignored by cargo.
